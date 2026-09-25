@@ -6,6 +6,8 @@
  */
 
 import { definePluginSettings } from "@api/Settings";
+import { managedStyleRootNode } from "@api/Styles";
+import { createAndAppendStyle } from "@utils/css";
 import definePlugin, { OptionType } from "@utils/types";
 import { GuildMemberStore, GuildRoleStore, GuildStore, PermissionsBits, SelectedGuildStore, Tooltip, UserStore, useStateFromStores } from "@webpack/common";
 
@@ -29,6 +31,16 @@ const settings = definePluginSettings({
 });
 
 const reactiveSettings = ["useCrown", "useRoleColor", "ignoreBots", "ignoreSelf", "owners", "admins", "management", "voiceList", "memberList", "messages", "profiles", "ownerLabel", "adminLabel", "managementLabel"] as const;
+
+// Plugin managedStyle expects the name of an imported "?managed" stylesheet, not CSS text,
+// so the rules are added in start() to keep this plugin a single file.
+const css = `
+.vc-stafftag { display: inline-flex; align-items: center; flex: none; vertical-align: middle; margin-left: 4px; line-height: 1; }
+.vc-stafftag svg { display: block; }
+.vc-stafftag-label { display: inline-block; padding: 2px 4px; border-radius: 3px; border: 1px solid currentColor; font-size: 10px; font-weight: 700; }
+.vc-stafftag-voice { margin-right: 3px; }
+`;
+let style: HTMLStyleElement | undefined;
 
 function getStaffKind(guildId: string, userId: string): StaffKind | null {
     const guild = GuildStore.getGuild(guildId);
@@ -90,12 +102,14 @@ export default definePlugin({
     tags: ["Appearance", "Roles", "Voice"],
     dependencies: ["MemberListDecoratorsAPI", "MessageDecorationsAPI", "NicknameIconsAPI"],
     settings,
-    managedStyle: `
-        .vc-stafftag { display: inline-flex; align-items: center; flex: none; vertical-align: middle; margin-left: 4px; line-height: 1; }
-        .vc-stafftag svg { display: block; }
-        .vc-stafftag-label { display: inline-block; padding: 2px 4px; border-radius: 3px; border: 1px solid currentColor; font-size: 10px; font-weight: 700; }
-        .vc-stafftag-voice { margin-right: 3px; }
-    `,
+    start() {
+        style = createAndAppendStyle("vc-stafftag-style", managedStyleRootNode);
+        style.textContent = css;
+    },
+    stop() {
+        style?.remove();
+        style = undefined;
+    },
     renderMemberListDecorator({ type, user, channel }) {
         if (type !== "guild" || !user) return null;
         const guildId = channel?.guild_id ?? SelectedGuildStore.getGuildId();
