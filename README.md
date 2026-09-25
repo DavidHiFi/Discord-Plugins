@@ -36,7 +36,7 @@ StaffTag reads Discord's cached guild and role data. A missing member cache entr
 
 The TestCord voice and message badges were confirmed in Discord PTB, and TestCord loaded cleanly in both PTB and Stable. The Equicord and Vencord variants passed source builds, lint, and TypeScript checks; they have not been tested in a live Discord window.
 
-Version 1.0.0 logged `Failed to start plugin Error: Style "..." does not exist` at every Discord start. The badges still appeared, but without their spacing rules. Version 1.0.1 fixes this; update if you see that error.
+Version 1.0.0 logged `Failed to start plugin Error: Style "..." does not exist` at every Discord start. That error stopped the member list, message, and profile badges from registering, so only the voice badge worked. Version 1.0.1 fixes this; update if you see that error.
 
 The voice badge uses a Discord renderer patch. A future Discord UI change may require an update to that patch. If the client logs a StaffTag patch warning after an update, check this repository for a newer release.
 
