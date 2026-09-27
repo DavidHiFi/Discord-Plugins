@@ -12,14 +12,9 @@ import { settings as musicControlsSettings } from "@testcordplugins/PanelLayout/
 import { TidalStore } from "@testcordplugins/PanelLayout/modules/musicControls/tidal/TidalStore";
 import { Logger } from "@utils/Logger";
 import definePlugin, { OptionType } from "@utils/types";
-import { FluxDispatcher } from "@webpack/common";
+import { FluxDispatcher, PresenceStore, UserStore } from "@webpack/common";
 
 const logger = new Logger("LyricsStatus");
-
-const PlaybackSource = {
-    Tidal: "tidal",
-    Spotify: "spotify",
-} as const;
 
 const settings = definePluginSettings({
     active: {
@@ -40,16 +35,13 @@ const settings = definePluginSettings({
     },
     source: {
         type: OptionType.SELECT,
-        description: "Music service used for playback and lyric timing.",
-        default: PlaybackSource.Tidal,
+        description: "Music player used for lyric status",
         options: [
-            { label: "TIDAL via TIDALuna", value: PlaybackSource.Tidal, default: true },
-            { label: "Spotify", value: PlaybackSource.Spotify },
+            { label: "Automatic", value: "auto", default: true },
+            { label: "Dopamine", value: "dopamine" },
+            { label: "TIDAL", value: "tidal" },
+            { label: "Spotify", value: "spotify" },
         ],
-        onChange() {
-            resetPlaybackState();
-            if (resolveSource() === PlaybackSource.Tidal) onTidalPlayerState();
-        },
     },
     customMessageOnStop: {
         type: OptionType.BOOLEAN,
@@ -90,7 +82,21 @@ let lastPositionTs = 0;
 let currentTrackId = "";
 let currentTrackName = "";
 let currentArtist = "";
-let receivedPlaybackState = false;
+const DOPAMINE_APP_ID = "826521040275636325";
+const DOPAMINE_BRIDGE_URL = "http://127.0.0.1:35499";
+
+interface DopamineBridgeState {
+    title: string;
+    artists: string;
+    playing: boolean;
+    startTime: number;
+    artworkUrl: string | null;
+}
+
+let bridgeState: DopamineBridgeState | null = null;
+let bridgeSeenAt = 0;
+let bridgeRefreshing = false;
+let bridgeIntervalId: ReturnType<typeof setInterval> | null = null;
 
 function getPosition(): number {
     if (!isPlaying) return lastPosition;
@@ -150,11 +156,24 @@ async function fetchLyrics(track: string, artist: string, id: string, signal?: A
     if (lyricsCache.has(id)) return lyricsCache.get(id) ?? null;
     const cleanedTrack = cleanTrackName(track);
     try {
-        const res = await fetch(`https://lrclib.net/api/get?${new URLSearchParams({ track_name: cleanedTrack, artist_name: artist })}`, { signal });
-        if (!res.ok) { lyricsCache.set(id, null); return null; }
-        const data = await res.json() as { syncedLyrics?: string; };
-        const lines = data.syncedLyrics ? parseLrc(data.syncedLyrics) : null;
-        lyricsCache.set(id, lines);
+        const query = new URLSearchParams({ track_name: cleanedTrack, artist_name: artist });
+        const res = await fetch(`https://lrclib.net/api/get?${query}`, { signal });
+        let data = res.ok ? await res.json() as { syncedLyrics?: string; } : null;
+        if (!data?.syncedLyrics && (res.ok || res.status === 404)) {
+            const search = await fetch(`https://lrclib.net/api/search?${query}`, { signal });
+            if (search.ok) {
+                const results = await search.json() as { trackName: string; artistName: string; syncedLyrics?: string; }[];
+                const normalizedTitle = cleanedTrack.toLowerCase();
+                const normalizedArtist = artist.toLowerCase();
+                data = results.find(result =>
+                    cleanTrackName(result.trackName).toLowerCase() === normalizedTitle &&
+                    result.artistName.toLowerCase() === normalizedArtist &&
+                    !!result.syncedLyrics,
+                ) ?? null;
+            }
+        }
+        const lines = data?.syncedLyrics ? parseLrc(data.syncedLyrics) : null;
+        if (res.ok || res.status === 404) lyricsCache.set(id, lines);
         return lines;
     } catch (e) {
         if (signal?.aborted) return null;
@@ -266,6 +285,11 @@ function handleStopStatus() {
     }
 }
 
+function statusLooksLikeLyric() {
+    const prefix = settings.store.format.split("{lyrics}")[0];
+    return !!prefix && !!CustomStatusSetting?.getSetting()?.text?.startsWith(prefix);
+}
+
 // ── Tick loop ─────────────────────────────────────────────────────────────────
 
 let intervalId: ReturnType<typeof setInterval> | null = null;
@@ -274,35 +298,23 @@ let lyricGeneration = 0;
 let lyricsAbortController: AbortController | null = null;
 
 function tick() {
-    if (!settings.store.active || !isPlaying) return;
-    if (!currentLines) {
-        if (currentTrackId) {
-            const id = currentTrackId;
-            const gen = lyricGeneration;
-            fetchLyrics(currentTrackName, currentArtist, id)
-                .then(lines => {
-                    if (settings.store.active && gen === lyricGeneration && currentTrackId === id && lines) {
-                        currentLines = lines;
-                        tick();
-                    }
-                })
-                .catch(() => { });
-        }
-        return;
-    }
+    if (!settings.store.active) return;
+    updateActivePlayback();
+    if (!isPlaying || !currentLines) return;
     const line = getCurrentLine(currentLines, getPosition() + getCurrentDelay());
     if (!line) return;
-    let format = settings.store.format || "🎵 {lyrics}";
-    if (format.includes("??")) {
-        format = "🎵 {lyrics}";
-        settings.store.format = format;
-    }
-    const text = format
+    const text = settings.store.format
         .replace("{lyrics}", line)
         .replace("{song}", currentTrackName)
         .replace("{artist}", currentArtist);
     void setStatus(text);
 }
+
+// Dopamine's own RPC (patched by dopamine-rpc-patch) is the single presence
+// writer: it sends the stock icon immediately and replays the activity with
+// the iTunes cover once the artwork lookup resolves. LyricsStatus stays
+// lyrics-only and reads the bridge as its playback clock; it never publishes
+// a second Discord activity.
 
 // ── Flux ──────────────────────────────────────────────────────────────────────
 
@@ -312,27 +324,80 @@ interface SpotifyPlayerState {
     position: number;
 }
 
-interface PlaybackState {
-    id: string;
-    name: string;
-    artist: string;
-    isPlaying: boolean;
-    position: number;
+let spotifyPlayerState: SpotifyPlayerState | null = null;
+let spotifyStateTs = 0;
+
+function getDopaminePlayback() {
+    if (bridgeState && Date.now() - bridgeSeenAt < 5000) {
+        return {
+            id: `dopamine:${bridgeState.title}:${bridgeState.artists}`,
+            name: bridgeState.title,
+            artist: bridgeState.artists.split(/[;,]/)[0].trim(),
+            playing: bridgeState.playing,
+            position: bridgeState.playing ? Math.max(0, Date.now() - bridgeState.startTime) : 0,
+        };
+    }
+    const userId = UserStore.getCurrentUser()?.id;
+    if (!userId) return null;
+    const activities = PresenceStore.getActivities(userId) ?? [];
+    const activity = activities.find(a => a.application_id === DOPAMINE_APP_ID && a.type === 2);
+    if (!activity?.details || !activity.state) return null;
+
+    const start = activity.timestamps?.start;
+    const startMillis = start ? start < 1e12 ? start * 1000 : start : 0;
+    return {
+        id: `dopamine:${activity.details}:${activity.state}`,
+        name: activity.details,
+        artist: activity.state.split(/[;,]/)[0].trim(),
+        playing: !!startMillis,
+        position: startMillis ? Math.max(0, Date.now() - startMillis) : lastPosition,
+    };
 }
 
-function updatePlaybackState(state: PlaybackState) {
-    const wasPlaying = isPlaying;
-    const newId = state.id;
-    const trackChanged = newId !== currentTrackId;
+async function refreshDopamineBridge() {
+    if (bridgeRefreshing) return;
+    bridgeRefreshing = true;
+    try {
+        const response = await fetch(`${DOPAMINE_BRIDGE_URL}/current`, { signal: AbortSignal.timeout(1500) });
+        if (!response.ok) throw new Error(`Dopamine bridge returned ${response.status}`);
+        const data = await response.json() as Partial<DopamineBridgeState>;
+        bridgeState = data.title && data.artists ? data as DopamineBridgeState : null;
+        bridgeSeenAt = Date.now();
+        if (settings.store.active) updateActivePlayback();
+    } catch {
+        if (Date.now() - bridgeSeenAt >= 5000) {
+            bridgeState = null;
+        }
+    } finally {
+        bridgeRefreshing = false;
+    }
+}
 
-    isPlaying = state.isPlaying;
-    lastPosition = state.position;
+function getTidalPlayback() {
+    const { track } = TidalStore;
+    if (!track) return null;
+    return {
+        id: `tidal:${track.id}`,
+        name: track.name,
+        artist: track.artist,
+        playing: TidalStore.isPlaying,
+        position: TidalStore.position,
+    };
+}
+
+function updatePlayback(newId: string, name: string, artist: string, playing: boolean, position: number) {
+    const trackChanged = newId !== currentTrackId;
+    const wasPlaying = isPlaying;
+
+    isPlaying = playing;
+    lastPosition = position;
     lastPositionTs = Date.now();
     currentTrackId = newId;
-    currentTrackName = state.name;
-    currentArtist = state.artist;
+    currentTrackName = name;
+    currentArtist = artist;
 
     if (trackChanged) {
+        if (lastSentLine !== null || statusLooksLikeLyric()) handleStopStatus();
         currentLines = null;
         lyricsAbortController?.abort();
         const generation = ++lyricGeneration;
@@ -349,56 +414,31 @@ function updatePlaybackState(state: PlaybackState) {
         }
     }
 
-    if (!isPlaying && (!receivedPlaybackState || wasPlaying)) {
-        void handleStopStatus();
-    } else if (isPlaying && currentTrackId) {
-        void tick();
-    }
-    receivedPlaybackState = true;
+    if (!isPlaying && (wasPlaying || trackChanged)) handleStopStatus();
 }
 
-function resetPlaybackState() {
-    lyricGeneration++;
-    lyricsAbortController?.abort();
-    lyricsAbortController = null;
-    currentLines = null;
-    isPlaying = false;
-    lastPosition = 0;
-    lastPositionTs = 0;
-    currentTrackId = "";
-    currentTrackName = "";
-    currentArtist = "";
-    receivedPlaybackState = false;
-}
-
-function resolveSource(): typeof PlaybackSource[keyof typeof PlaybackSource] {
-    const raw = settings.store.source;
-    return raw === PlaybackSource.Spotify ? PlaybackSource.Spotify : PlaybackSource.Tidal;
+function updateActivePlayback() {
+    const dopamine = getDopaminePlayback();
+    const tidal = getTidalPlayback();
+    const spotify = spotifyPlayerState;
+    const spotifyPlayback = spotify?.track ? {
+        id: spotify.track.id,
+        name: spotify.track.name,
+        artist: spotify.track.artists?.[0]?.name ?? "",
+        playing: spotify.isPlaying ?? false,
+        position: (spotify.position ?? 0) + (spotify.isPlaying ? Date.now() - spotifyStateTs : 0),
+    } : null;
+    const sources = { dopamine, tidal, spotify: spotifyPlayback };
+    const selected = settings.store.source === "auto"
+        ? dopamine?.playing ? dopamine : tidal?.playing ? tidal : spotifyPlayback?.playing ? spotifyPlayback : dopamine ?? tidal ?? spotifyPlayback
+        : sources[settings.store.source];
+    updatePlayback(selected?.id ?? "", selected?.name ?? "", selected?.artist ?? "", selected?.playing ?? false, selected?.position ?? 0);
 }
 
 function onSpotifyPlayerState(e: SpotifyPlayerState) {
-    if (resolveSource() !== PlaybackSource.Spotify) return;
-
-    updatePlaybackState({
-        id: e.track?.id ?? "",
-        name: e.track?.name ?? "",
-        artist: e.track?.artists?.[0]?.name ?? "",
-        isPlaying: e.isPlaying ?? false,
-        position: e.position ?? 0,
-    });
-}
-
-function onTidalPlayerState() {
-    if (resolveSource() !== PlaybackSource.Tidal) return;
-
-    const { track } = TidalStore;
-    updatePlaybackState({
-        id: track ? `tidal:${track.id}` : "",
-        name: track?.name ?? "",
-        artist: track?.artist ?? "",
-        isPlaying: TidalStore.isPlaying,
-        position: TidalStore.position,
-    });
+    spotifyPlayerState = e;
+    spotifyStateTs = Date.now();
+    updateActivePlayback();
 }
 
 function Icon({ className, active }: { className?: string; active: boolean; }) {
@@ -412,7 +452,7 @@ function Icon({ className, active }: { className?: string; active: boolean; }) {
     return (
         <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <mask id="lyricsStatusLine">
-                <rect width="100%" height="100%" fill="#ffffff" />
+                <rect width="100%" fill="#ffffff" height="100%" />
                 <line
                     className="blackLine"
                     x1="22"
@@ -469,7 +509,7 @@ function LyricsStatusToggleButton({ iconForeground, hideTooltips, nameplate }: U
                     handleStopStatus();
                 } else {
                     tick();
-                    if (intervalId === null) intervalId = setInterval(tick, 2000);
+                    if (intervalId === null) intervalId = setInterval(tick, 1000);
                 }
             }}
         />
@@ -478,7 +518,7 @@ function LyricsStatusToggleButton({ iconForeground, hideTooltips, nameplate }: U
 
 export default definePlugin({
     name: "LyricsStatus",
-    description: "Shows the current TIDAL or Spotify lyric line in your Discord custom status. Lyrics are fetched from LrcLib.",
+    description: "Shows Dopamine, TIDAL, or Spotify lyrics in your Discord custom status. Lyrics fetched from LrcLib.",
     tags: ["Activity", "Utility"],
     authors: [
         { name: "Sharp", id: 0n },
@@ -494,18 +534,18 @@ export default definePlugin({
 
     start() {
         try {
+            if (settings.store.source === "tidal") settings.store.source = "auto";
             loadCustomSongDelays();
+            void refreshDopamineBridge();
+            bridgeIntervalId = setInterval(refreshDopamineBridge, 1000);
             FluxDispatcher.subscribe("SPOTIFY_PLAYER_STATE", onSpotifyPlayerState as any);
             FluxDispatcher.subscribe("SPOTIFY_LYRICS_DELAYS_LOADED", loadCustomSongDelays as any);
             FluxDispatcher.subscribe("SPOTIFY_LYRICS_CUSTOM_DELAY_CHANGE", onCustomDelayChange as any);
-            TidalStore.addChangeListener(onTidalPlayerState);
-            onTidalPlayerState();
             if (settings.store.active) {
-                if (intervalId !== null) clearInterval(intervalId);
-                intervalId = setInterval(tick, 2000);
-                void tick();
+                tick();
+                if (intervalId === null) intervalId = setInterval(tick, 1000);
             }
-            logger.info(`Started (source=${resolveSource()}, active=${settings.store.active})`);
+            logger.info(`Started (source=${settings.store.source}, active=${settings.store.active})`);
         } catch (e) {
             logger.error("start failed:", e);
             throw e;
@@ -519,12 +559,18 @@ export default definePlugin({
         FluxDispatcher.unsubscribe("SPOTIFY_PLAYER_STATE", onSpotifyPlayerState as any);
         FluxDispatcher.unsubscribe("SPOTIFY_LYRICS_DELAYS_LOADED", loadCustomSongDelays as any);
         FluxDispatcher.unsubscribe("SPOTIFY_LYRICS_CUSTOM_DELAY_CHANGE", onCustomDelayChange as any);
-        TidalStore.removeChangeListener(onTidalPlayerState);
         if (intervalId !== null) { clearInterval(intervalId); intervalId = null; }
+        if (bridgeIntervalId !== null) { clearInterval(bridgeIntervalId); bridgeIntervalId = null; }
         if (!isPlaying) handleStopStatus();
-        resetPlaybackState();
+        currentLines = null;
         lyricsCache.clear();
         lastSentLine = null;
+        isPlaying = false;
+        currentTrackId = "";
+        spotifyPlayerState = null;
+        spotifyStateTs = 0;
+        bridgeState = null;
+        bridgeSeenAt = 0;
         savedOriginalStatus = null;
         statusWriteInFlight = false;
     },
