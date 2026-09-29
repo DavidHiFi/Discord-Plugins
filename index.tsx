@@ -16,20 +16,22 @@ import { UserAreaButton, UserAreaRenderProps } from "@api/UserArea";
 import { openPluginModal } from "@components/settings";
 import { Logger } from "@utils/Logger";
 import definePlugin, { makeRange, OptionType } from "@utils/types";
-import { findByPropsLazy } from "@webpack";
+import { findByCodeLazy, findByPropsLazy } from "@webpack";
 import { Button, MediaEngineStore, React, RelationshipStore, SelectedChannelStore, showToast, Toasts, UserStore, VoiceStateStore } from "@webpack/common";
 
 const logger = new Logger("MicSpamGuard");
 
 const IGNORED_KEY = "MicSpamGuard_ignored";
 const HELD_KEY = "MicSpamGuard_held_volumes";
-const POLL_MS = 500;
+const BALANCE_VERSION_KEY = "MicSpamGuard_balance_v2";
+const POLL_MS = 100;
 const STALE_MS = 3000;
-const LOUD_WINDOW_MS = 6000;
 const TRIGGER_COOLDOWN_MS = 3000;
 const LEVEL_FLOOR_DB = -45;
-const ATTACK_TAU_MS = 150;
-const RELEASE_TAU_MS = 800;
+const SPEECH_HOLD_MS = 1500;
+const AUTO_RATIO = 2;
+const AUTO_CEILING = 200;
+const AUTO_GATE_DB = -48;
 
 const MIC_GUARD_KEYS = ["enabled"] as const;
 
@@ -53,6 +55,11 @@ interface TurnedDown {
     volume: number;
     applied: number;
     at: number;
+    gainDb: number;
+    inputDb: number;
+    sampleAt: number;
+    speechAt: number;
+    speechMs: number;
 }
 
 const levels = new Map<string, number>();
@@ -63,17 +70,21 @@ const mutedByUs = new Map<string, number>();
 const turnedDown = new Map<string, TurnedDown>();
 const ignored = new Set<string>();
 const savedVolume = new Map<string, number>();
+const pausedDynamics = new Set<string>();
 
 const { setLocalVolume } = findByPropsLazy("setLocalVolume");
+const volumeToAmplitude: (volume: number) => number = findByCodeLazy(/Math\.pow\([^,]+,\s*2\.8\)/);
+const amplitudeToVolume: (volume: number) => number = findByCodeLazy("Math.log10", "35714285714285715");
 
 let connection: VoiceConnection | null = null;
 let boundConnection: VoiceConnection | null = null;
 let intervalId: ReturnType<typeof setInterval> | undefined;
+let persistQueue = Promise.resolve();
 
 const settings = definePluginSettings({
     enabled: {
         type: OptionType.BOOLEAN,
-        description: "Watch the call and mute, or turn down, anyone who gets too loud or spams their mic.",
+        description: "Protect the call from extreme loudness and balance voice volumes.",
         default: true,
         onChange() {
             if (!settings.store.enabled) {
@@ -82,11 +93,23 @@ const settings = definePluginSettings({
             }
         }
     },
+    autoMute: {
+        type: OptionType.BOOLEAN,
+        displayName: "Extreme loudness protection",
+        description: "Temporarily mute sustained extreme loudness. Works alongside dynamic volume.",
+        default: true,
+        onChange(on: boolean) {
+            loudAt.clear();
+            if (!on) unmuteAll("silent");
+        }
+    },
     threshold: {
         type: OptionType.SLIDER,
-        description: "How loud someone has to get before the guard reacts. Dynamic User Volume keeps them under this line. The live meter above uses the same scale.",
-        markers: makeRange(30, 100, 5),
-        default: 70,
+        displayName: "Extreme loudness threshold",
+        description: "Only levels above this point can trigger a mute. Higher means more extreme. Everyday loud voices are handled by dynamic volume.",
+        hidden: () => !settings.store.autoMute,
+        markers: makeRange(90, 100, 1),
+        default: 98,
         stickToMarkers: true,
         onChange() {
             loudAt.clear();
@@ -94,7 +117,9 @@ const settings = definePluginSettings({
     },
     sensitivity: {
         type: OptionType.SLIDER,
-        description: "How many loud samples are needed before a mute (mute mode only). Higher reacts to shorter sounds.",
+        displayName: "Mute sensitivity",
+        description: "Higher reacts sooner. Lower requires more consecutive extreme samples. A normal or quiet sample resets the count.",
+        hidden: () => !settings.store.autoMute,
         markers: makeRange(1, 10, 1),
         default: 5,
         stickToMarkers: true,
@@ -104,7 +129,9 @@ const settings = definePluginSettings({
     },
     autoUnmute: {
         type: OptionType.SELECT,
-        description: "How long they have to STAY QUIET before a guard mute lifts. While they keep being loud the mute holds - no mute/unmute loop. Off keeps them muted until you unmute them. Mute mode only.",
+        displayName: "Auto unmute",
+        description: "How long extreme loudness must stop before their manual volume is restored. Off requires a manual unmute.",
+        hidden: () => !settings.store.autoMute,
         options: [
             { label: "Off (stay muted)", value: 0 },
             { label: "3 seconds", value: 3 },
@@ -118,28 +145,59 @@ const settings = definePluginSettings({
     },
     dynamicUserVolume: {
         type: OptionType.BOOLEAN,
-        description: "Instead of muting, turn loud people down. Their local volume drops while they're loud and comes back when they quiet down, so they always stay audible - a compressor-style alternative to muting. Off keeps the normal mute behavior.",
+        description: "Automatically turn loud people down and quiet people up. Volumes change smoothly and return to your manual settings during silence.",
         default: false,
         onChange(on: boolean) {
-            if (on) unmuteAll("silent");
-            else restoreAll("silent");
+            pausedDynamics.clear();
+            if (!on) restoreAll("silent");
         }
     },
-    dynamicUserVolumeFloor: {
+    dynamicTarget: {
         type: OptionType.SLIDER,
-        description: "How far down Dynamic User Volume will ever turn someone while they're loud. They stay audible at this volume; their normal volume always comes back when they stop.",
-        markers: makeRange(0, 60, 5),
-        default: 20,
+        displayName: "Voice level",
+        description: "Desired voice level on the meter. Higher keeps voices louder; lower reduces them more. Start at 65.",
+        hidden: () => !settings.store.dynamicUserVolume,
+        markers: makeRange(55, 75, 5),
+        default: 65,
         stickToMarkers: true
+    },
+    dynamicMaxReduction: {
+        type: OptionType.SLIDER,
+        displayName: "Maximum volume reduction",
+        description: "Limit how far loud voices can turn down from your manual volume. 6 is mild, 12 is moderate, 18 is strong.",
+        hidden: () => !settings.store.dynamicUserVolume,
+        markers: makeRange(3, 18, 3),
+        default: 12,
+        stickToMarkers: true
+    },
+    dynamicMaxBoost: {
+        type: OptionType.SLIDER,
+        displayName: "Maximum quiet voice boost",
+        description: "Limit how much quiet voices turn up. 6 allows about twice the gain, with a 200% slider ceiling. 0 disables boosting.",
+        hidden: () => !settings.store.dynamicUserVolume,
+        markers: makeRange(0, 12, 3),
+        default: 6,
+        stickToMarkers: true
+    },
+    dynamicResponse: {
+        type: OptionType.SELECT,
+        displayName: "Response speed",
+        description: "How smoothly volume changes after a voice sample arrives. Balanced is recommended. Discord's incoming samples still limit reaction time.",
+        hidden: () => !settings.store.dynamicUserVolume,
+        options: [
+            { label: "Fast", value: 150 },
+            { label: "Balanced", value: 250, default: true },
+            { label: "Gentle", value: 400 }
+        ]
     },
     ignoreFriends: {
         type: OptionType.BOOLEAN,
-        description: "Never mute your friends.",
+        description: "Exclude friends from muting and automatic volume changes.",
         default: true
     },
     notify: {
         type: OptionType.BOOLEAN,
-        description: "Show a toast when the guard mutes, unmutes, turns someone down, or restores their volume.",
+        description: "Show a toast for mute, unmute, and manual volume restore. Automatic balancing stays silent.",
         default: true
     }
 });
@@ -183,11 +241,24 @@ function currentVoiceMembers(): string[] {
     }
 }
 
-function turnDownTarget(level: number, base: number) {
-    const gainDb = (settings.store.threshold - level) * (-LEVEL_FLOOR_DB / 100);
-    const ceiling = 100 * Math.pow(10, gainDb / 20);
-    const floor = Math.min(settings.store.dynamicUserVolumeFloor, base);
-    return Math.max(floor, Math.min(base, ceiling));
+function dynamicGain(entry: TurnedDown, now: number) {
+    if (now - entry.speechAt > SPEECH_HOLD_MS || now - entry.sampleAt >= STALE_MS) return 0;
+
+    const targetDb = LEVEL_FLOOR_DB + settings.store.dynamicTarget * (-LEVEL_FLOOR_DB / 100);
+    const outputDb = entry.inputDb + 20 * Math.log10(entry.base / 100);
+    const errorDb = targetDb - outputDb;
+    const ratio = AUTO_RATIO;
+    const kneeDb = 6;
+    let gainDb: number;
+    if (errorDb < -kneeDb / 2) gainDb = errorDb * (1 - 1 / ratio);
+    else if (errorDb < kneeDb / 2) gainDb = -(1 - 1 / ratio) * Math.pow(kneeDb / 2 - errorDb, 2) / (2 * kneeDb);
+    else gainDb = entry.speechMs >= 750 ? (errorDb - kneeDb / 2) * 0.75 : 0;
+
+    const floor = Math.min(entry.base, volumeToAmplitude(5));
+    const minGain = Math.max(-settings.store.dynamicMaxReduction, floor > 0 ? 20 * Math.log10(floor / entry.base) : -Infinity);
+    const ceiling = Math.max(entry.base, volumeToAmplitude(AUTO_CEILING));
+    const maxGain = Math.min(settings.store.dynamicMaxBoost, 20 * Math.log10(ceiling / entry.base));
+    return Math.max(minGain, Math.min(maxGain, gainDb));
 }
 
 function getConnection(): VoiceConnection | null {
@@ -235,9 +306,10 @@ function readInbound(payload: any): InboundSample[] {
 }
 
 function mute(userId: string, level: number) {
-    if (settings.store.dynamicUserVolume) return;
+    if (!settings.store.autoMute) return;
     if (mutedByUs.has(userId) || isLocalMuted(userId)) return;
 
+    restoreVolume(userId, "silent");
     savedVolume.set(userId, MediaEngineStore.getLocalVolume(userId));
     setLocalVolume(userId, 0);
     mutedByUs.set(userId, Date.now());
@@ -270,10 +342,12 @@ function restoreVolume(userId: string, mode: "manual" | "silent") {
     const entry = turnedDown.get(userId);
     if (!entry || !turnedDown.delete(userId)) return;
 
-    setLocalVolume(userId, entry.base);
+    const current = MediaEngineStore.getLocalVolume(userId);
+    if (Math.abs(current - entry.applied) < 0.5) setLocalVolume(userId, entry.base);
+    if (mode === "manual") pausedDynamics.add(userId);
     savedVolume.delete(userId);
     persistHeld();
-    logger.debug(`restored ${userId} to ${entry.base}%`);
+    logger.debug(`restored ${userId} to ${Math.round(amplitudeToVolume(entry.base))}%`);
 
     if (mode === "silent" || !settings.store.notify) return;
 
@@ -285,37 +359,69 @@ function restoreAll(mode: "manual" | "silent") {
 }
 
 function updateDynamics(now: number) {
-    if (!settings.store.dynamicUserVolume) return;
+    if (!settings.store.enabled || !settings.store.dynamicUserVolume) return;
 
     for (const [userId, entry] of [...turnedDown]) {
-        const fresh = now - (levelAt.get(userId) ?? 0) < STALE_MS;
-        const level = fresh ? levels.get(userId) ?? 0 : 0;
-        const target = isIgnored(userId) || isLocalMuted(userId)
-            ? entry.base
-            : turnDownTarget(level, entry.base);
+        if (isIgnored(userId) || isLocalMuted(userId)) {
+            restoreVolume(userId, "silent");
+            continue;
+        }
 
+        const current = MediaEngineStore.getLocalVolume(userId);
+        if (Math.abs(current - entry.applied) >= 0.5) {
+            if (!Number.isFinite(current) || current <= 0) {
+                restoreVolume(userId, "silent");
+                continue;
+            }
+            entry.base = current;
+            entry.volume = current;
+            entry.applied = current;
+            entry.gainDb = 0;
+            entry.at = now;
+            savedVolume.set(userId, current);
+            persistHeld();
+            continue;
+        }
+
+        const target = dynamicGain(entry, now);
         const dt = Math.min(1000, Math.max(0, now - entry.at));
-        const tau = target < entry.volume ? ATTACK_TAU_MS : RELEASE_TAU_MS;
-        entry.volume += (target - entry.volume) * (1 - Math.exp(-dt / tau));
+        const response = settings.store.dynamicResponse;
+        const tau = target < 0 && target < entry.gainDb ? response : target > entry.gainDb && target > 0 ? Math.max(1600, response * 6) : Math.max(600, response * 3);
+        entry.gainDb += (target - entry.gainDb) * (1 - Math.exp(-dt / tau));
+        const floor = Math.min(entry.base, volumeToAmplitude(5));
+        const minGain = Math.max(-settings.store.dynamicMaxReduction, floor > 0 ? 20 * Math.log10(floor / entry.base) : -Infinity);
+        const maxGain = Math.min(settings.store.dynamicMaxBoost, 20 * Math.log10(Math.max(entry.base, volumeToAmplitude(AUTO_CEILING)) / entry.base));
+        entry.gainDb = Math.max(minGain, Math.min(maxGain, entry.gainDb));
+        entry.volume = entry.base * Math.pow(10, entry.gainDb / 20);
         entry.at = now;
 
-        const applied = Math.round(entry.volume);
+        const applied = Math.round(entry.volume * 10) / 10;
         if (applied !== entry.applied) {
             entry.applied = applied;
             setLocalVolume(userId, applied);
         }
 
-        if (target >= entry.base - 0.5 && entry.volume >= entry.base - 0.5) restoreVolume(userId, "silent");
+        if (now - entry.speechAt > SPEECH_HOLD_MS && Math.abs(entry.gainDb) < 0.05) restoreVolume(userId, "silent");
     }
 }
 
 function onStats(payload: any) {
     const now = Date.now();
-    const { enabled, threshold, sensitivity, dynamicUserVolume } = settings.store;
+    const { enabled, sensitivity, dynamicUserVolume, autoMute } = settings.store;
+    const threshold = Math.max(90, settings.store.threshold);
     const needed = Math.max(1, Math.round((11 - sensitivity) * 0.4));
 
+    const members = new Set(currentVoiceMembers());
+    const samples = new Map<string, number>();
     for (const { userId, entry } of readInbound(payload)) {
-        const percent = toPercent(Number(entry.audioLevel));
+        if (!members.has(userId) || entry.type === "video" || entry.mediaType === "video" || entry.kind === "video") continue;
+        const amplitude = Number(entry.audioLevel);
+        if (!Number.isFinite(amplitude) || amplitude < 0) continue;
+        samples.set(userId, Math.max(samples.get(userId) ?? 0, Math.min(1, amplitude)));
+    }
+
+    for (const [userId, amplitude] of samples) {
+        const percent = toPercent(amplitude);
         levels.set(userId, percent);
         levelAt.set(userId, now);
 
@@ -323,40 +429,47 @@ function onStats(payload: any) {
 
         if (!enabled) continue;
 
+        if (isIgnored(userId) || isLocalMuted(userId)) continue;
+        if (mutedByUs.has(userId)) continue;
+        if (autoMute && percent >= threshold && MediaEngineStore.getLocalVolume(userId) > 0) {
+            const loud = loudAt.get(userId) ?? [];
+            if (loud.length && now - loud[loud.length - 1] >= STALE_MS) loud.length = 0;
+            loud.push(now);
+            loudAt.set(userId, loud);
+            if (loud.length >= needed && now - (lastTriggerAt.get(userId) ?? 0) > TRIGGER_COOLDOWN_MS) {
+                loudAt.delete(userId);
+                lastTriggerAt.set(userId, now);
+                mute(userId, percent);
+                continue;
+            }
+        } else loudAt.delete(userId);
+
         if (dynamicUserVolume) {
-            if (!turnedDown.has(userId) && !isIgnored(userId) && !isLocalMuted(userId)) {
+            if (isIgnored(userId) || isLocalMuted(userId) || pausedDynamics.has(userId)) continue;
+            const inputDb = amplitude > 0 ? 20 * Math.log10(amplitude) : -Infinity;
+            let state = turnedDown.get(userId);
+            if (!state && inputDb >= AUTO_GATE_DB) {
                 const base = MediaEngineStore.getLocalVolume(userId);
-                const target = turnDownTarget(percent, base);
-
-                if (target < base) {
-                    turnedDown.set(userId, { base, volume: base, applied: Math.round(base), at: now });
-                    savedVolume.set(userId, base);
-                    persistHeld();
-                    logger.debug(`turning down ${userId} to ${Math.round(target)}% (base ${base}%)`);
-
-                    if (settings.store.notify && now - (lastTriggerAt.get(userId) ?? 0) > TRIGGER_COOLDOWN_MS) {
-                        lastTriggerAt.set(userId, now);
-                        showToast(`MicSpamGuard turned down ${displayName(userId)} to ${Math.round(target)}% volume.`, Toasts.Type.MESSAGE);
-                    }
+                if (!Number.isFinite(base) || base <= 0) continue;
+                state = { base, volume: base, applied: base, at: now, gainDb: 0, inputDb, sampleAt: now, speechAt: now, speechMs: 0 };
+                turnedDown.set(userId, state);
+                savedVolume.set(userId, base);
+                persistHeld();
+            }
+            if (state) {
+                const dt = Math.min(STALE_MS, Math.max(0, now - state.sampleAt));
+                if (inputDb >= AUTO_GATE_DB) {
+                    state.speechMs = now - state.speechAt < STALE_MS ? state.speechMs + dt : 0;
+                    const alpha = 1 - Math.exp(-dt / (inputDb > state.inputDb ? 75 : 200));
+                    state.inputDb += (inputDb - state.inputDb) * alpha;
+                    state.speechAt = now;
                 }
+                state.sampleAt = now;
             }
 
             continue;
         }
 
-        if (percent < threshold) continue;
-        if (isIgnored(userId) || mutedByUs.has(userId) || isLocalMuted(userId)) continue;
-
-        const loud = loudAt.get(userId) ?? [];
-        loud.push(now);
-        while (loud.length && now - loud[0] > LOUD_WINDOW_MS) loud.shift();
-        loudAt.set(userId, loud);
-
-        if (loud.length >= needed && now - (lastTriggerAt.get(userId) ?? 0) > TRIGGER_COOLDOWN_MS) {
-            loudAt.set(userId, []);
-            lastTriggerAt.set(userId, now);
-            mute(userId, percent);
-        }
     }
 
     if (dynamicUserVolume) updateDynamics(now);
@@ -366,6 +479,8 @@ function bindConnection(conn: VoiceConnection | null) {
     if (conn === boundConnection) return;
 
     boundConnection?.emitter?.off?.("stats", onStats);
+    restoreAll("silent");
+    pausedDynamics.clear();
     boundConnection = conn;
     conn?.emitter?.on?.("stats", onStats);
 }
@@ -378,6 +493,10 @@ function poll() {
 
         const now = Date.now();
         const members = new Set(currentVoiceMembers());
+        for (const userId of [...turnedDown.keys()]) {
+            if (!members.has(userId)) restoreVolume(userId, "silent");
+        }
+        for (const userId of [...pausedDynamics]) if (!members.has(userId)) pausedDynamics.delete(userId);
         for (const userId of [...levels.keys()]) {
             if (!members.has(userId)) {
                 levels.delete(userId);
@@ -403,7 +522,8 @@ function poll() {
 }
 
 function persistHeld() {
-    void DataStore.set(HELD_KEY, Object.fromEntries(savedVolume)).catch(() => { });
+    const held = Object.fromEntries(savedVolume);
+    persistQueue = persistQueue.then(() => DataStore.set(HELD_KEY, held)).catch(e => logger.error("failed to save held volumes", e));
 }
 
 async function saveIgnored() {
@@ -416,6 +536,10 @@ async function saveIgnored() {
 
 function toggleIgnored(userId: string) {
     if (!ignored.delete(userId)) ignored.add(userId);
+    if (isIgnored(userId)) {
+        restoreVolume(userId, "silent");
+        unmute(userId, "silent");
+    }
     void saveIgnored();
 }
 
@@ -425,7 +549,7 @@ function unmuteAll(mode: "manual" | "silent" = "manual") {
 
 function MeterRow({ userId }: { userId: string; }) {
     const level = levels.get(userId) ?? 0;
-    const { threshold } = settings.store;
+    const threshold = settings.store.dynamicUserVolume ? settings.store.dynamicTarget : settings.store.threshold;
     const loud = level >= threshold;
     const ignoredUser = isIgnored(userId);
     const muted = mutedByUs.has(userId);
@@ -448,6 +572,7 @@ function MeterRow({ userId }: { userId: string; }) {
             </Button>
             {muted && <Button size={Button.Sizes.SMALL} color={Button.Colors.BRAND} onClick={() => unmute(userId, "manual")}>Unmute</Button>}
             {turned && <Button size={Button.Sizes.SMALL} color={Button.Colors.BRAND} onClick={() => restoreVolume(userId, "manual")}>Restore</Button>}
+            {pausedDynamics.has(userId) && <Button size={Button.Sizes.SMALL} color={Button.Colors.BRAND} onClick={() => pausedDynamics.delete(userId)}>Resume</Button>}
         </div>
     );
 }
@@ -466,7 +591,7 @@ function GuardPanel() {
         <div style={{ marginBottom: 16 }}>
             <div style={{ color: "var(--header-primary)", fontWeight: 600, fontSize: 16 }}>Live levels</div>
             <div style={{ color: "var(--header-secondary)", fontSize: 13, marginBottom: 8 }}>
-                Everyone currently in the voice channel, with their loudest recent moments. The thin line on each bar is your threshold.
+                Voice volumes balance automatically while Dynamic User Volume is on. Restore pauses it for that person until Resume.
             </div>
 
             {live.length === 0
@@ -475,10 +600,10 @@ function GuardPanel() {
 
             {turnedDown.size > 0 && (
                 <div style={{ marginTop: 12 }}>
-                    <div style={{ color: "var(--header-primary)", fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Turned down by the guard</div>
+                    <div style={{ color: "var(--header-primary)", fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Automatic user volumes</div>
                     {[...turnedDown].map(([userId, entry]) => (
                         <div key={userId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "4px 0" }}>
-                            <span style={{ color: "var(--status-warning)" }}>{displayName(userId)} - {entry.applied}% volume</span>
+                            <span style={{ color: "var(--status-warning)" }}>{displayName(userId)}: {Math.round(amplitudeToVolume(entry.applied))}% volume</span>
                             <Button size={Button.Sizes.SMALL} color={Button.Colors.PRIMARY} onClick={() => restoreVolume(userId, "manual")}>Restore</Button>
                         </div>
                     ))}
@@ -554,7 +679,7 @@ function MicSpamGuardButton({ iconForeground, hideTooltips, nameplate }: UserAre
 
 export default definePlugin({
     name: "MicSpamGuard",
-    description: "Locally mutes, or dynamically turns down, anyone who gets too loud or spams their mic in a voice channel.",
+    description: "Smoothly balances voice volumes and protects the call from sustained extreme loudness.",
     authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
     tags: ["Voice", "Utility"],
     enabledByDefault: true,
@@ -568,6 +693,20 @@ export default definePlugin({
 
     async start() {
         try {
+            if (!await DataStore.get(BALANCE_VERSION_KEY)) {
+                if (settings.store.dynamicMaxReduction > 18) {
+                    settings.store.dynamicTarget = 65;
+                    settings.store.dynamicMaxReduction = 12;
+                    settings.store.dynamicMaxBoost = 6;
+                }
+                if (settings.store.threshold < 90) settings.store.threshold = 98;
+                await DataStore.set(BALANCE_VERSION_KEY, true);
+            }
+        } catch (e) {
+            logger.error("failed to migrate voice balance settings", e);
+        }
+
+        try {
             const saved = await DataStore.get(IGNORED_KEY);
             if (Array.isArray(saved)) {
                 for (const userId of saved) if (typeof userId === "string") ignored.add(userId);
@@ -580,7 +719,7 @@ export default definePlugin({
             const held = await DataStore.get(HELD_KEY);
             if (held && typeof held === "object") {
                 for (const [userId, volume] of Object.entries(held as Record<string, number>)) {
-                    if (typeof volume === "number") setLocalVolume(userId, volume);
+                    if (typeof volume === "number" && Number.isFinite(volume) && volume >= 0) setLocalVolume(userId, volume);
                 }
                 await DataStore.del(HELD_KEY);
             }
