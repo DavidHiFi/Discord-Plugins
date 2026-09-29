@@ -47,6 +47,58 @@ let fakeStreamActive = false;
 let globalForceUpdate: (() => void) | null = null;
 
 /* ===========================
+ * External control (Stream Deck bridge)
+ * Same code paths as the context menu, exposed on window.__fakeVoice and read
+ * from the main process by native.ts.
+ * =========================== */
+export type FakeVoiceKind = "mute" | "deafen" | "camera" | "stream" | "game";
+
+export function getFakeStates(): Record<FakeVoiceKind, boolean> {
+    return {
+        mute: !fakeStates.mute,
+        deafen: !fakeStates.deafen,
+        camera: fakeStates.video,
+        stream: settings.store.fakeStream,
+        game: settings.store.fakeGame
+    };
+}
+
+export function setFakeState(kind: FakeVoiceKind, value: boolean): Record<FakeVoiceKind, boolean> {
+    switch (kind) {
+        case "mute":
+            fakeStates.mute = !value;
+            showFakeToast("mute", value);
+            triggerGatewayUpdate();
+            break;
+        case "deafen":
+            fakeStates.deafen = !value;
+            showFakeToast("deafen", value);
+            triggerGatewayUpdate();
+            break;
+        case "camera":
+            fakeStates.video = value;
+            showFakeToast("video", value);
+            triggerGatewayUpdate();
+            break;
+        case "stream":
+            toggleFakeStream(value);
+            showFakeToast("stream", value);
+            break;
+        case "game":
+            toggleFakeGame(value);
+            showFakeToast("game", value);
+            break;
+    }
+
+    globalForceUpdate?.();
+    return getFakeStates();
+}
+
+export function toggleFakeState(kind: FakeVoiceKind): Record<FakeVoiceKind, boolean> {
+    return setFakeState(kind, !getFakeStates()[kind]);
+}
+
+/* ===========================
  * Settings
  * =========================== */
 const settings = definePluginSettings({
@@ -273,10 +325,7 @@ function FakeVoiceContextMenu() {
                 label="Fake Mute"
                 checked={!fakeStates.mute}
                 action={() => {
-                    fakeStates.mute = !fakeStates.mute;
-                    showFakeToast("mute", !fakeStates.mute);
-                    triggerGatewayUpdate();
-                    globalForceUpdate?.();
+                    toggleFakeState("mute");
                     forceUpdate();
                 }}
             />
@@ -285,10 +334,7 @@ function FakeVoiceContextMenu() {
                 label="Fake Deafen"
                 checked={!fakeStates.deafen}
                 action={() => {
-                    fakeStates.deafen = !fakeStates.deafen;
-                    showFakeToast("deafen", !fakeStates.deafen);
-                    triggerGatewayUpdate();
-                    globalForceUpdate?.();
+                    toggleFakeState("deafen");
                     forceUpdate();
                 }}
             />
@@ -297,10 +343,7 @@ function FakeVoiceContextMenu() {
                 label="Fake Camera"
                 checked={fakeStates.video}
                 action={() => {
-                    fakeStates.video = !fakeStates.video;
-                    showFakeToast("video", fakeStates.video);
-                    triggerGatewayUpdate();
-                    globalForceUpdate?.();
+                    toggleFakeState("camera");
                     forceUpdate();
                 }}
             />
@@ -310,10 +353,7 @@ function FakeVoiceContextMenu() {
                 label="Fake Stream"
                 checked={settings.store.fakeStream}
                 action={() => {
-                    const next = !settings.store.fakeStream;
-                    toggleFakeStream(next);
-                    showFakeToast("stream", next);
-                    globalForceUpdate?.();
+                    toggleFakeState("stream");
                     forceUpdate();
                 }}
             />
@@ -322,10 +362,7 @@ function FakeVoiceContextMenu() {
                 label="Fake Game"
                 checked={settings.store.fakeGame}
                 action={() => {
-                    const next = !settings.store.fakeGame;
-                    toggleFakeGame(next);
-                    showFakeToast("game", next);
-                    globalForceUpdate?.();
+                    toggleFakeState("game");
                     forceUpdate();
                 }}
             />
@@ -479,10 +516,16 @@ export default definePlugin({
         loadStores();
         document.addEventListener("keydown", keybindDeafen);
         document.addEventListener("keydown", keybindMute);
+        (window as any).__fakeVoice = {
+            state: getFakeStates,
+            set: setFakeState,
+            toggle: toggleFakeState
+        };
     },
     stop() {
         document.removeEventListener("keydown", keybindDeafen);
         document.removeEventListener("keydown", keybindMute);
+        delete (window as any).__fakeVoice;
         globalForceUpdate = null;
         if (settings.store.fakeGame) leaveActivity(getSelectedVoiceChannel()?.id);
         if (fakeStreamActive) stopStream();

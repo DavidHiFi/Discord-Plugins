@@ -7,10 +7,45 @@ This is DavidHiFi's maintained fork of deracul's FakeVoice user plugin. The orig
 ## Install in TestCord
 
 1. Use a [TestCord source checkout](https://github.com/TestcordDev/TestCord) with Node.js and its required pnpm version.
-2. Copy [`index.tsx`](index.tsx) to `<TestCord>/src/userplugins/fakevoice/index.tsx`.
+2. Copy [`index.tsx`](index.tsx) and [`native.ts`](native.ts) to `<TestCord>/src/userplugins/fakevoice/`.
 3. In the TestCord checkout, run `pnpm install` if needed, then `pnpm build`.
 4. Follow TestCord's desktop injection instructions if TestCord is not already installed. Restart Discord to load the new build.
 5. Open Discord User Settings, find FakeVoice in TestCord's plugin list, and enable it.
+
+## External control (Stream Deck bridge)
+
+`native.ts` runs in the Electron main process. It does not implement the fake
+states; it reads the renderer API that `index.tsx` installs as
+`window.__fakeVoice`, so toggles behave exactly like the context-menu items.
+
+Loopback HTTP API, bound to `127.0.0.1:47830`:
+
+| Route | Effect |
+| --- | --- |
+| `GET /fakevoice/ping` | Bridge liveness |
+| `GET /fakevoice/state` | `{ "mute": bool, "deafen": bool, "camera": bool, "stream": bool, "game": bool }` (true = fake state on) |
+| `GET /fakevoice/toggle/<kind>` | Toggle one state, returns the new state |
+| `GET /fakevoice/set/<kind>/<0\|1>` | Set one state explicitly |
+
+`<kind>` is `mute`, `deafen`, `camera`, `stream`, or `game`.
+
+Optional system-wide hotkeys, registered by the main process:
+
+| Hotkey | State |
+| --- | --- |
+| `Ctrl+Alt+Shift+F9` | Fake mute |
+| `Ctrl+Alt+Shift+F10` | Fake deafen |
+| `Ctrl+Alt+Shift+F11` | Fake camera |
+| `Ctrl+Alt+Shift+F12` | Fake stream |
+| `Ctrl+Alt+Shift+F8` | Fake game |
+
+A ready-made Stream Deck plugin that uses this bridge (Fake Mute, Fake Deafen,
+Fake Camera, Fake Stream, Fake Game keys with on/off state) is installed at
+`%APPDATA%\Elgato\StreamDeck\Plugins\com.davidhifi.fakevoice.sdPlugin`; its key
+faces bake in the name and the ON/OFF word so the deck never clips a title.
+
+If Stable and a second TestCord client run at once, only the first one to start
+owns port 47830, so the bridge controls that client.
 
 ## Changes in this fork
 
