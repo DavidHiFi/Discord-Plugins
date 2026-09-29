@@ -5,7 +5,8 @@
  * SPDX-License-Identifier: MIT
  *
  * Rebuilt on the media engine stats the desktop client actually provides,
- * with snap settings and a user area button.
+ * with snap settings, a user area button, a dynamic user volume mode and
+ * a live panel that follows voice channel membership.
  */
 
 import { DataStore } from "@api/index";
@@ -16,7 +17,7 @@ import { openPluginModal } from "@components/settings";
 import { Logger } from "@utils/Logger";
 import definePlugin, { makeRange, OptionType } from "@utils/types";
 import { findByPropsLazy } from "@webpack";
-import { Button, MediaEngineStore, React, RelationshipStore, showToast, Toasts, UserStore } from "@webpack/common";
+import { Button, MediaEngineStore, React, RelationshipStore, SelectedChannelStore, showToast, Toasts, UserStore, VoiceStateStore } from "@webpack/common";
 
 const logger = new Logger("MicSpamGuard");
 
@@ -27,6 +28,8 @@ const STALE_MS = 3000;
 const LOUD_WINDOW_MS = 6000;
 const TRIGGER_COOLDOWN_MS = 3000;
 const LEVEL_FLOOR_DB = -45;
+const ATTACK_TAU_MS = 150;
+const RELEASE_TAU_MS = 800;
 
 const MIC_GUARD_KEYS = ["enabled"] as const;
 
@@ -45,11 +48,19 @@ interface InboundSample {
     entry: Record<string, any>;
 }
 
+interface TurnedDown {
+    base: number;
+    volume: number;
+    applied: number;
+    at: number;
+}
+
 const levels = new Map<string, number>();
 const levelAt = new Map<string, number>();
 const loudAt = new Map<string, number[]>();
 const lastTriggerAt = new Map<string, number>();
 const mutedByUs = new Map<string, number>();
+const turnedDown = new Map<string, TurnedDown>();
 const ignored = new Set<string>();
 const savedVolume = new Map<string, number>();
 
@@ -62,15 +73,18 @@ let intervalId: ReturnType<typeof setInterval> | undefined;
 const settings = definePluginSettings({
     enabled: {
         type: OptionType.BOOLEAN,
-        description: "Watch the call and mute anyone who gets too loud or spams their mic.",
+        description: "Watch the call and mute, or turn down, anyone who gets too loud or spams their mic.",
         default: true,
         onChange() {
-            if (!settings.store.enabled) unmuteAll("silent");
+            if (!settings.store.enabled) {
+                unmuteAll("silent");
+                restoreAll("silent");
+            }
         }
     },
     threshold: {
         type: OptionType.SLIDER,
-        description: "How loud someone has to get before the guard reacts. The live meter above uses the same scale.",
+        description: "How loud someone has to get before the guard reacts. Dynamic User Volume keeps them under this line. The live meter above uses the same scale.",
         markers: makeRange(30, 100, 5),
         default: 70,
         stickToMarkers: true,
@@ -80,7 +94,7 @@ const settings = definePluginSettings({
     },
     sensitivity: {
         type: OptionType.SLIDER,
-        description: "How many loud samples are needed before a mute. Higher reacts to shorter sounds.",
+        description: "How many loud samples are needed before a mute (mute mode only). Higher reacts to shorter sounds.",
         markers: makeRange(1, 10, 1),
         default: 5,
         stickToMarkers: true,
@@ -90,7 +104,7 @@ const settings = definePluginSettings({
     },
     autoUnmute: {
         type: OptionType.SELECT,
-        description: "How long they have to STAY QUIET before a guard mute lifts. While they keep being loud the mute holds - no mute/unmute loop. Off keeps them muted until you unmute them.",
+        description: "How long they have to STAY QUIET before a guard mute lifts. While they keep being loud the mute holds - no mute/unmute loop. Off keeps them muted until you unmute them. Mute mode only.",
         options: [
             { label: "Off (stay muted)", value: 0 },
             { label: "3 seconds", value: 3 },
@@ -102,6 +116,22 @@ const settings = definePluginSettings({
             { label: "5 minutes", value: 300 }
         ]
     },
+    dynamicUserVolume: {
+        type: OptionType.BOOLEAN,
+        description: "Instead of muting, turn loud people down. Their local volume drops while they're loud and comes back when they quiet down, so they always stay audible - a compressor-style alternative to muting. Off keeps the normal mute behavior.",
+        default: false,
+        onChange(on: boolean) {
+            if (on) unmuteAll("silent");
+            else restoreAll("silent");
+        }
+    },
+    dynamicUserVolumeFloor: {
+        type: OptionType.SLIDER,
+        description: "How far down Dynamic User Volume will ever turn someone while they're loud. They stay audible at this volume; their normal volume always comes back when they stop.",
+        markers: makeRange(0, 60, 5),
+        default: 20,
+        stickToMarkers: true
+    },
     ignoreFriends: {
         type: OptionType.BOOLEAN,
         description: "Never mute your friends.",
@@ -109,7 +139,7 @@ const settings = definePluginSettings({
     },
     notify: {
         type: OptionType.BOOLEAN,
-        description: "Show a toast when the guard mutes, unmutes, or auto-unmutes someone.",
+        description: "Show a toast when the guard mutes, unmutes, turns someone down, or restores their volume.",
         default: true
     }
 });
@@ -140,6 +170,24 @@ function isIgnored(userId: string) {
 
 function isLocalMuted(userId: string) {
     return connection?.localMutes?.[userId] ?? MediaEngineStore.isLocalMute(userId);
+}
+
+function currentVoiceMembers(): string[] {
+    try {
+        const channelId = SelectedChannelStore.getVoiceChannelId();
+        if (!channelId) return [];
+        return Object.keys(VoiceStateStore.getVoiceStatesForChannel(channelId) ?? {});
+    } catch (e) {
+        logger.error("failed to read voice channel members", e);
+        return [];
+    }
+}
+
+function turnDownTarget(level: number, base: number) {
+    const gainDb = (settings.store.threshold - level) * (-LEVEL_FLOOR_DB / 100);
+    const ceiling = 100 * Math.pow(10, gainDb / 20);
+    const floor = Math.min(settings.store.dynamicUserVolumeFloor, base);
+    return Math.max(floor, Math.min(base, ceiling));
 }
 
 function getConnection(): VoiceConnection | null {
@@ -187,6 +235,7 @@ function readInbound(payload: any): InboundSample[] {
 }
 
 function mute(userId: string, level: number) {
+    if (settings.store.dynamicUserVolume) return;
     if (mutedByUs.has(userId) || isLocalMuted(userId)) return;
 
     savedVolume.set(userId, MediaEngineStore.getLocalVolume(userId));
@@ -217,9 +266,52 @@ function unmute(userId: string, mode: "manual" | "auto" | "silent") {
     );
 }
 
+function restoreVolume(userId: string, mode: "manual" | "silent") {
+    const entry = turnedDown.get(userId);
+    if (!entry || !turnedDown.delete(userId)) return;
+
+    setLocalVolume(userId, entry.base);
+    savedVolume.delete(userId);
+    persistHeld();
+    logger.debug(`restored ${userId} to ${entry.base}%`);
+
+    if (mode === "silent" || !settings.store.notify) return;
+
+    showToast(`MicSpamGuard restored ${displayName(userId)}'s volume.`, Toasts.Type.MESSAGE);
+}
+
+function restoreAll(mode: "manual" | "silent") {
+    for (const userId of [...turnedDown.keys()]) restoreVolume(userId, mode);
+}
+
+function updateDynamics(now: number) {
+    if (!settings.store.dynamicUserVolume) return;
+
+    for (const [userId, entry] of [...turnedDown]) {
+        const fresh = now - (levelAt.get(userId) ?? 0) < STALE_MS;
+        const level = fresh ? levels.get(userId) ?? 0 : 0;
+        const target = isIgnored(userId) || isLocalMuted(userId)
+            ? entry.base
+            : turnDownTarget(level, entry.base);
+
+        const dt = Math.min(1000, Math.max(0, now - entry.at));
+        const tau = target < entry.volume ? ATTACK_TAU_MS : RELEASE_TAU_MS;
+        entry.volume += (target - entry.volume) * (1 - Math.exp(-dt / tau));
+        entry.at = now;
+
+        const applied = Math.round(entry.volume);
+        if (applied !== entry.applied) {
+            entry.applied = applied;
+            setLocalVolume(userId, applied);
+        }
+
+        if (target >= entry.base - 0.5 && entry.volume >= entry.base - 0.5) restoreVolume(userId, "silent");
+    }
+}
+
 function onStats(payload: any) {
     const now = Date.now();
-    const { enabled, threshold, sensitivity } = settings.store;
+    const { enabled, threshold, sensitivity, dynamicUserVolume } = settings.store;
     const needed = Math.max(1, Math.round((11 - sensitivity) * 0.4));
 
     for (const { userId, entry } of readInbound(payload)) {
@@ -229,7 +321,30 @@ function onStats(payload: any) {
 
         if (mutedByUs.has(userId) && percent >= threshold) mutedByUs.set(userId, now);
 
-        if (!enabled || percent < threshold) continue;
+        if (!enabled) continue;
+
+        if (dynamicUserVolume) {
+            if (!turnedDown.has(userId) && !isIgnored(userId) && !isLocalMuted(userId)) {
+                const base = MediaEngineStore.getLocalVolume(userId);
+                const target = turnDownTarget(percent, base);
+
+                if (target < base) {
+                    turnedDown.set(userId, { base, volume: base, applied: Math.round(base), at: now });
+                    savedVolume.set(userId, base);
+                    persistHeld();
+                    logger.debug(`turning down ${userId} to ${Math.round(target)}% (base ${base}%)`);
+
+                    if (settings.store.notify && now - (lastTriggerAt.get(userId) ?? 0) > TRIGGER_COOLDOWN_MS) {
+                        lastTriggerAt.set(userId, now);
+                        showToast(`MicSpamGuard turned down ${displayName(userId)} to ${Math.round(target)}% volume.`, Toasts.Type.MESSAGE);
+                    }
+                }
+            }
+
+            continue;
+        }
+
+        if (percent < threshold) continue;
         if (isIgnored(userId) || mutedByUs.has(userId) || isLocalMuted(userId)) continue;
 
         const loud = loudAt.get(userId) ?? [];
@@ -243,6 +358,8 @@ function onStats(payload: any) {
             mute(userId, percent);
         }
     }
+
+    if (dynamicUserVolume) updateDynamics(now);
 }
 
 function bindConnection(conn: VoiceConnection | null) {
@@ -260,9 +377,19 @@ function poll() {
         bindConnection(conn);
 
         const now = Date.now();
-        for (const [userId] of levels) {
-            if (now - (levelAt.get(userId) ?? 0) >= STALE_MS) levels.set(userId, 0);
+        const members = new Set(currentVoiceMembers());
+        for (const userId of [...levels.keys()]) {
+            if (!members.has(userId)) {
+                levels.delete(userId);
+                levelAt.delete(userId);
+                loudAt.delete(userId);
+                lastTriggerAt.delete(userId);
+            } else if (now - (levelAt.get(userId) ?? 0) >= STALE_MS) {
+                levels.set(userId, 0);
+            }
         }
+
+        updateDynamics(now);
 
         const seconds = settings.store.autoUnmute;
         if (seconds > 0) {
@@ -302,6 +429,7 @@ function MeterRow({ userId }: { userId: string; }) {
     const loud = level >= threshold;
     const ignoredUser = isIgnored(userId);
     const muted = mutedByUs.has(userId);
+    const turned = turnedDown.has(userId);
 
     return (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0" }}>
@@ -319,6 +447,7 @@ function MeterRow({ userId }: { userId: string; }) {
                 {ignored.has(userId) ? "Allow" : "Ignore"}
             </Button>
             {muted && <Button size={Button.Sizes.SMALL} color={Button.Colors.BRAND} onClick={() => unmute(userId, "manual")}>Unmute</Button>}
+            {turned && <Button size={Button.Sizes.SMALL} color={Button.Colors.BRAND} onClick={() => restoreVolume(userId, "manual")}>Restore</Button>}
         </div>
     );
 }
@@ -331,18 +460,31 @@ function GuardPanel() {
         return () => clearInterval(id);
     }, []);
 
-    const live = [...levels.keys()];
+    const live = currentVoiceMembers();
 
     return (
         <div style={{ marginBottom: 16 }}>
             <div style={{ color: "var(--header-primary)", fontWeight: 600, fontSize: 16 }}>Live levels</div>
             <div style={{ color: "var(--header-secondary)", fontSize: 13, marginBottom: 8 }}>
-                These are the loudest moments of everyone you can hear right now. The thin line on each bar is your threshold.
+                Everyone currently in the voice channel, with their loudest recent moments. The thin line on each bar is your threshold.
             </div>
 
             {live.length === 0
                 ? <div style={{ color: "var(--text-muted)" }}>Join a voice channel to see levels.</div>
                 : live.map(userId => <MeterRow key={userId} userId={userId} />)}
+
+            {turnedDown.size > 0 && (
+                <div style={{ marginTop: 12 }}>
+                    <div style={{ color: "var(--header-primary)", fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Turned down by the guard</div>
+                    {[...turnedDown].map(([userId, entry]) => (
+                        <div key={userId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "4px 0" }}>
+                            <span style={{ color: "var(--status-warning)" }}>{displayName(userId)} - {entry.applied}% volume</span>
+                            <Button size={Button.Sizes.SMALL} color={Button.Colors.PRIMARY} onClick={() => restoreVolume(userId, "manual")}>Restore</Button>
+                        </div>
+                    ))}
+                    <Button size={Button.Sizes.SMALL} color={Button.Colors.PRIMARY} onClick={() => restoreAll("manual")} style={{ marginTop: 4 }}>Restore all</Button>
+                </div>
+            )}
 
             {mutedByUs.size > 0 && (
                 <div style={{ marginTop: 12 }}>
@@ -412,7 +554,7 @@ function MicSpamGuardButton({ iconForeground, hideTooltips, nameplate }: UserAre
 
 export default definePlugin({
     name: "MicSpamGuard",
-    description: "Locally mutes anyone who gets too loud or spams their mic in a voice channel.",
+    description: "Locally mutes, or dynamically turns down, anyone who gets too loud or spams their mic in a voice channel.",
     authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
     tags: ["Voice", "Utility"],
     enabledByDefault: true,
@@ -462,6 +604,8 @@ export default definePlugin({
 
         for (const userId of [...mutedByUs.keys()]) unmute(userId, "silent");
         mutedByUs.clear();
+        restoreAll("silent");
+        turnedDown.clear();
         levels.clear();
         levelAt.clear();
     }
