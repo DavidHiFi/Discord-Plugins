@@ -10,3 +10,6 @@
 [submodule "custom-stream-quality"]
 	path = custom-stream-quality
 	url = https://github.com/DavidHiFi/CustomStreamQuality-UserPlugin.git
+[submodule "rounded-vc-pfp"]
+	path = rounded-vc-pfp
+	url = https://github.com/DavidHiFi/RoundedVcPfp-UserPlugin.git

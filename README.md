@@ -8,6 +8,7 @@ Master repository for my user plugins for [Vencord](https://github.com/Vencord/V
 | [FakeVoice](fakevoice/) | Maintained TestCord fork of FakeVoice: fake voice stats, device spoofing, and health-tracking fixes | [FakeVoice-UserPlugin](https://github.com/DavidHiFi/FakeVoice-UserPlugin) |
 | [Better Lyrics Sync](better-lyrics-sync/) | Current lyric line as your custom status from Dopamine, TIDAL, or Spotify — plus a Dopamine cover-art RPC patch | [better-lyrics-sync](https://github.com/DavidHiFi/better-lyrics-sync) |
 | [Custom Stream Quality](custom-stream-quality/) | MIT rewrite of the stream-quality plugin with independent advertised badge settings | [CustomStreamQuality-UserPlugin](https://github.com/DavidHiFi/CustomStreamQuality-UserPlugin) |
+| [RoundedVcPfp](rounded-vc-pfp/) | Fork of Equicord's FullVCPFP that rounds the corners of the profile pictures shown in voice channel tiles, with a radius slider | [RoundedVcPfp-UserPlugin](https://github.com/DavidHiFi/RoundedVcPfp-UserPlugin) |
 
 ## Cloning
 
@@ -37,6 +38,7 @@ Each plugin ships its own README with per-plugin install steps. The usual TestCo
 | FakeVoice | [`fakevoice/`](fakevoice/) — copy `src/userplugins/fakevoice`, rebuild, restart |
 | Better Lyrics Sync | [`better-lyrics-sync/`](better-lyrics-sync/) — copy `src/lyricsStatus`, rebuild, restart; Dopamine users also run `dopamine-rpc-patch` |
 | Custom Stream Quality | [`custom-stream-quality/`](custom-stream-quality/) — copy the plugin folder, rebuild, restart |
+| RoundedVcPfp | [`rounded-vc-pfp/`](rounded-vc-pfp/) — copy `src/userplugins/RoundedVcPfp`, rebuild, restart |
 
 ## Licenses
 
@@ -44,5 +46,6 @@ Each plugin ships its own README with per-plugin install steps. The usual TestCo
 - Custom Stream Quality: MIT
 - Better Lyrics Sync: GPL-3.0-or-later (inherits the upstream TestCord plugin)
 - FakeVoice: GPL-3.0-or-later (inherits the upstream TestCord plugin)
+- RoundedVcPfp: GPL-3.0-or-later (inherits the upstream Equicord FullVCPFP plugin)
 
 Each submodule keeps its own license; see the linked repositories for full terms.
