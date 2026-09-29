@@ -1,0 +1,59 @@
+.vc-discord-dev-banner-text {
+    white-space: pre-wrap;
+    padding: 2px;
+}
+
+.vc-discord-dev-banner-error {
+    margin-top: 8px;
+    color: var(--text-feedback-critical);
+}
+
+.vc-discord-dev-banner-icons {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    height: 1em;
+    width: 1em;
+    margin-right: 0.25em;
+}
+
+.vc-discord-dev-banner-input {
+    width: 100%;
+    resize: none;
+    overflow: hidden;
+    background-color: var(--background-base-low);
+    color: var(--text-default);
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: 12px;
+    outline: none;
+    margin-top: 12px;
+}
+
+.panellayout-scrollbar::-webkit-scrollbar,
+.deracul-scrollbar::-webkit-scrollbar {
+    width: 8px !important;
+    height: 8px !important;
+}
+
+.panellayout-scrollbar::-webkit-scrollbar-track,
+.deracul-scrollbar::-webkit-scrollbar-track {
+    background: var(--scrollbar-thin-track, transparent) !important;
+    border-radius: 4px !important;
+}
+
+.panellayout-scrollbar::-webkit-scrollbar-thumb,
+.deracul-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thin-thumb, var(--background-tertiary, var(--background-surface-highest))) !important;
+    border-radius: 4px !important;
+}
+
+.panellayout-scrollbar::-webkit-scrollbar-thumb:hover,
+.deracul-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-auto-thumb, var(--background-modifier-hover, rgba(255, 255, 255, 0.25))) !important;
+}
+
+.panellayout-scrollbar,
+.deracul-scrollbar {
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--scrollbar-thin-thumb, var(--background-tertiary, var(--background-surface-highest))) transparent !important;
+}

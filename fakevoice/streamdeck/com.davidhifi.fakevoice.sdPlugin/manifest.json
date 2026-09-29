@@ -1,0 +1,120 @@
+{
+    "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+    "SDKVersion": 2,
+    "UUID": "com.davidhifi.fakevoice",
+    "Author": "DavidHiFi",
+    "Name": "FakeVoice (Discord fake states)",
+    "Description": "Toggles FakeVoice's fake mute, deafen, camera, stream and game states in TestCord (Discord). Requires the FakeVoice TestCord user plugin with the bridge build.",
+    "Version": "1.0.3",
+    "Icon": "imgs/plugin",
+    "URL": "https://github.com/DavidHiFi/Discord-Plugins/tree/main/fakevoice",
+    "CodePath": "plugin.html",
+    "Category": "FakeVoice",
+    "CategoryIcon": "imgs/plugin",
+    "OS": [
+        {
+            "Platform": "windows",
+            "MinimumVersion": "10"
+        }
+    ],
+    "Software": {
+        "MinimumVersion": "5.0"
+    },
+    "Actions": [
+        {
+            "Icon": "imgs/actions/fakemute",
+            "Name": "Fake Mute",
+            "UUID": "com.davidhifi.fakevoice.fakemute",
+            "Tooltip": "Toggle this client's fake mute (FakeVoice)",
+            "Controllers": [
+                "Keypad"
+            ],
+            "DisableAutomaticStates": true,
+            "UserTitleEnabled": false,
+            "States": [
+                {
+                    "Image": "imgs/keys/fakemute-off"
+                },
+                {
+                    "Image": "imgs/keys/fakemute-on"
+                }
+            ]
+        },
+        {
+            "Icon": "imgs/actions/fakedeafen",
+            "Name": "Fake Deafen",
+            "UUID": "com.davidhifi.fakevoice.fakedeafen",
+            "Tooltip": "Toggle this client's fake deafen (FakeVoice)",
+            "Controllers": [
+                "Keypad"
+            ],
+            "DisableAutomaticStates": true,
+            "UserTitleEnabled": false,
+            "States": [
+                {
+                    "Image": "imgs/keys/fakedeafen-off"
+                },
+                {
+                    "Image": "imgs/keys/fakedeafen-on"
+                }
+            ]
+        },
+        {
+            "Icon": "imgs/actions/fakecamera",
+            "Name": "Fake Camera",
+            "UUID": "com.davidhifi.fakevoice.fakecamera",
+            "Tooltip": "Toggle this client's fake camera (FakeVoice)",
+            "Controllers": [
+                "Keypad"
+            ],
+            "DisableAutomaticStates": true,
+            "UserTitleEnabled": false,
+            "States": [
+                {
+                    "Image": "imgs/keys/fakecamera-off"
+                },
+                {
+                    "Image": "imgs/keys/fakecamera-on"
+                }
+            ]
+        },
+        {
+            "Icon": "imgs/actions/fakestream",
+            "Name": "Fake Stream",
+            "UUID": "com.davidhifi.fakevoice.fakestream",
+            "Tooltip": "Toggle this client's fake stream (FakeVoice)",
+            "Controllers": [
+                "Keypad"
+            ],
+            "DisableAutomaticStates": true,
+            "UserTitleEnabled": false,
+            "States": [
+                {
+                    "Image": "imgs/keys/fakestream-off"
+                },
+                {
+                    "Image": "imgs/keys/fakestream-on"
+                }
+            ]
+        },
+        {
+            "Icon": "imgs/actions/fakegame",
+            "Name": "Fake Game",
+            "UUID": "com.davidhifi.fakevoice.fakegame",
+            "Tooltip": "Toggle this client's fake game / Watch Together activity (FakeVoice)",
+            "Controllers": [
+                "Keypad"
+            ],
+            "DisableAutomaticStates": true,
+            "UserTitleEnabled": false,
+            "States": [
+                {
+                    "Image": "imgs/keys/fakegame-off"
+                },
+                {
+                    "Image": "imgs/keys/fakegame-on"
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/DavidHiFi/Discord-Plugins",
+  "plugins": [
+    {
+      "folder": "stafftag",
+      "name": "StaffTag",
+      "source": "stafftag",
+      "installTarget": "src/userplugins/staffTag",
+      "license": "MIT",
+      "description": "Staff badges in chat, member lists and profiles."
+    },
+    {
+      "folder": "fakevoice",
+      "name": "FakeVoice",
+      "source": "fakevoice",
+      "installTarget": "src/userplugins/fakevoice",
+      "license": "MIT",
+      "description": "Local fake voice states, a native loopback bridge and Stream Deck controls."
+    },
+    {
+      "folder": "better-lyrics-sync",
+      "name": "LyricsStatus",
+      "source": "better-lyrics-sync/src/lyricsStatus",
+      "installTarget": "src/testcordplugins/lyricsStatus",
+      "license": "GPL-3.0-or-later",
+      "description": "Current lyric lines in custom status, with the Dopamine RPC companion."
+    },
+    {
+      "folder": "custom-stream-quality",
+      "name": "Custom Stream Quality",
+      "source": "custom-stream-quality/src",
+      "installTarget": "src/testcordplugins/StreamQuality",
+      "license": "MIT",
+      "description": "Encoder controls and independent advertised stream badges."
+    },
+    {
+      "folder": "rounded-vc-pfp",
+      "name": "RoundedVcPfp",
+      "source": "rounded-vc-pfp",
+      "installTarget": "src/userplugins/RoundedVcPfp",
+      "license": "GPL-3.0-or-later",
+      "description": "Rounded full-resolution avatars on call tiles."
+    },
+    {
+      "folder": "mic-spam-guard",
+      "name": "MicSpamGuard",
+      "source": "mic-spam-guard",
+      "installTarget": "src/userplugins/MicSpamGuard",
+      "license": "MIT",
+      "description": "Gentle voice balancing and sustained extreme-loudness protection."
+    },
+    {
+      "folder": "stereo-guard",
+      "name": "StereoGuard",
+      "source": "stereo-guard",
+      "installTarget": "src/userplugins/StereoGuard",
+      "license": "MIT",
+      "description": "Stereo detection for known per-participant streams; no guessed output-mix mutes."
+    },
+    {
+      "folder": "voice-vu-meters",
+      "name": "VoiceVUMeters",
+      "source": "voice-vu-meters",
+      "installTarget": "src/userplugins/VoiceVUMeters",
+      "license": "MIT",
+      "description": "Real channel meters where streams are available, with a desktop mono fallback."
+    },
+    {
+      "folder": "has-strip",
+      "name": "HasStrip",
+      "source": "has-strip",
+      "installTarget": "src/testcordplugins/HasStrip",
+      "license": "GPL-3.0-or-later",
+      "description": "Removes costly :has() stylesheet rules, with visual tradeoffs."
+    },
+    {
+      "folder": "panel-layout",
+      "name": "PanelLayout",
+      "source": "panel-layout",
+      "installTarget": "src/testcordplugins/PanelLayout",
+      "license": "GPL-3.0-or-later",
+      "description": "The maintained TestCord panel layout, including the ping-freshness fix."
+    },
+    {
+      "folder": "full-vc-pfp",
+      "name": "FullVCPFP",
+      "source": "full-vc-pfp",
+      "installTarget": "src/equicordplugins/fullVcPfp",
+      "license": "GPL-3.0-or-later",
+      "description": "Maintained full-avatar call tiles and membership fixes."
+    },
+    {
+      "folder": "no-mirrored-camera",
+      "name": "NoMirroredCamera",
+      "source": "no-mirrored-camera",
+      "installTarget": "src/equicordplugins/noMirroredCamera",
+      "license": "GPL-3.0-or-later",
+      "description": "Bundled upstream camera-preview mirroring override."
+    },
+    {
+      "folder": "zak-fake-mute-deafen",
+      "name": "ZakFakeMuteDeafen",
+      "source": "zak-fake-mute-deafen",
+      "installTarget": "src/userplugins/zakFakeMuteDeafen",
+      "license": "GPL-3.0-or-later",
+      "description": "Bundled upstream fake mute/deafen alternative."
+    }
+  ]
+}
