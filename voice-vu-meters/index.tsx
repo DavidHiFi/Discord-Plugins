@@ -22,8 +22,9 @@ const POLL_MS = 50;
 const NOTIFY_MS = 33;
 const SCAN_MS = 500;
 const STATS_MS = 100;
-const HOLD_MS = 900;
-const RELEASE = 0.35;
+const HOLD_MS = 1500;
+const RELEASE_MS = 120;
+const PEAK_FALL_DB_PER_SECOND = 12;
 const BAR_HEIGHT = 18;
 const BAR_WIDTH = 4;
 const GRADIENT = "linear-gradient(to top, #21c55d 0%, #21c55d 50%, #eab308 75%, #ef4444 100%)";
@@ -63,6 +64,7 @@ interface Meter {
     display: [number, number];
     peak: [number, number];
     peakAt: [number, number];
+    sampleAt: [number, number];
     ownsInput?: boolean;
     inputContext?: AudioContext;
 }
@@ -103,7 +105,7 @@ const settings = definePluginSettings({
             lastScanAt = 0;
         }
     }
-});
+}).withPrivateSettings<{ peakHoldEnabled?: boolean; }>();
 
 function getConnection(): VoiceConnection | null {
     const engine = MediaEngineStore.getMediaEngine();
@@ -121,7 +123,7 @@ function isWebConnection(conn: VoiceConnection) {
 }
 
 function newMeter(mono: boolean, tap?: WebTap): Meter {
-    return { tap, amplitude: 0, mono, display: [0, 0], peak: [0, 0], peakAt: [0, 0] };
+    return { tap, amplitude: 0, mono, display: [0, 0], peak: [0, 0], peakAt: [0, 0], sampleAt: [0, 0] };
 }
 
 function channelCount(output: AudioOutput) {
@@ -397,14 +399,19 @@ function readChannel(analyser: AnalyserNode, buffer: Float32Array<ArrayBuffer>, 
 }
 
 function smooth(meter: Meter, channel: 0 | 1, level: { rms: number; peak: number; }, now: number) {
+    const previousAt = meter.sampleAt[channel] || now;
+    const elapsed = Math.max(0, now - previousAt);
+    meter.sampleAt[channel] = now;
     const display = meter.display[channel];
-    meter.display[channel] = level.rms >= display ? level.rms : display + (level.rms - display) * RELEASE;
+    meter.display[channel] = level.rms >= display ? level.rms : level.rms + (display - level.rms) * Math.exp(-elapsed / RELEASE_MS);
 
     if (level.peak >= meter.peak[channel]) {
         meter.peak[channel] = level.peak;
         meter.peakAt[channel] = now;
     } else if (now - meter.peakAt[channel] > HOLD_MS) {
-        meter.peak[channel] = Math.max(meter.display[channel], meter.peak[channel] - 0.02);
+        const fallMs = Math.max(0, now - Math.max(previousAt, meter.peakAt[channel] + HOLD_MS));
+        const fall = PEAK_FALL_DB_PER_SECOND * fallMs / (1000 * -settings.store.floorDb);
+        meter.peak[channel] = Math.max(meter.display[channel], meter.peak[channel] - fall);
     }
 }
 
@@ -481,8 +488,8 @@ function MeterBar({ width, value, peak, showPeak }: { width: number; value: numb
             {showPeak && peak > 0.01 && (
                 <div
                     style={{
-                        position: "absolute", bottom: `${peak * 100}%`, left: 0, right: 0, height: 2,
-                        background: peak > 0.995 ? "#8b0000" : peak > 0.916 ? "#ffa500" : "#d3d3d3"
+                        position: "absolute", top: `clamp(0px, calc(${(1 - peak) * 100}% - 1px), calc(100% - 2px))`, left: 0, right: 0, height: 2,
+                        background: peak > 0.995 ? "#ef4444" : peak > 0.916 ? "#ffa500" : "#d3d3d3"
                     }}
                 />
             )}
@@ -581,6 +588,10 @@ export default definePlugin({
     },
 
     start() {
+        if (!settings.store.peakHoldEnabled) {
+            settings.store.showPeak = true;
+            settings.store.peakHoldEnabled = true;
+        }
         intervalId = setInterval(tick, POLL_MS);
     },
 

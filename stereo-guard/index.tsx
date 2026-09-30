@@ -15,6 +15,8 @@ import definePlugin, { makeRange, OptionType } from "@utils/types";
 import { findByPropsLazy } from "@webpack";
 import { Button, MediaEngineStore, React, RelationshipStore, showToast, Toasts, UserStore } from "@webpack/common";
 
+import { VolumeHold } from "./protection";
+
 const logger = new Logger("StereoGuard");
 
 const IGNORED_KEY = "StereoGuard_ignored";
@@ -28,7 +30,6 @@ const TRIGGER_COOLDOWN_MS = 3000;
 const NOISE_GATE = 0.02;
 const RELEASE = 0.3;
 const LEVEL_FLOOR_DB = -45;
-const MUTED_NOISE_FLOOR = 25;
 
 const STEREO_GUARD_KEYS = ["enabled"] as const;
 
@@ -67,6 +68,7 @@ interface Meter {
 
 const meters = new Map<string, Meter>();
 const mutedByUs = new Map<string, number>();
+const volumeHolds = new Map<string, VolumeHold>();
 const ignored = new Set<string>();
 const savedVolume = new Map<string, number>();
 
@@ -86,6 +88,7 @@ let mixContext: AudioContext | null = null;
 let mixScore = 0;
 let captureDeviceLabel = "";
 let captureStarting = false;
+let persistQueue = Promise.resolve();
 
 const settings = definePluginSettings({
     enabled: {
@@ -130,7 +133,7 @@ const settings = definePluginSettings({
     },
     autoUnmute: {
         type: OptionType.SELECT,
-        description: "How long they have to STAY QUIET before a guard mute lifts. While they keep being loud the mute holds - a muted user leaves the output mix, so loudness keeps the mute alive until they stop. Off keeps them muted until you unmute them.",
+        description: "How long fresh participant-owned frames must stay below the release threshold before volume returns smoothly. Missing frames keep the hold. Off requires manual restore.",
         options: [
             { label: "Off (stay muted)", value: 0 },
             { label: "3 seconds", value: 3 },
@@ -464,10 +467,6 @@ function onStats(payload: any) {
 
             levels.set(userId, Number((entry as any).audioLevel) || 0);
             levelAt.set(userId, now);
-
-            if (mutedByUs.has(userId) && toPercent(levels.get(userId) ?? 0) >= MUTED_NOISE_FLOOR) {
-                mutedByUs.set(userId, now);
-            }
         }
     }
 }
@@ -490,11 +489,43 @@ function sampleMix(now: number) {
 
 }
 
+function otherGuardHolds(userId: string): boolean {
+    return Boolean((plugins.MicSpamGuard as any)?.isHolding?.(userId));
+}
+
+function heldBaseline(userId: string): number {
+    const other = (plugins.MicSpamGuard as any)?.getHeldBaseline?.(userId);
+    return Number.isFinite(other) && other >= 0 ? other : MediaEngineStore.getLocalVolume(userId);
+}
+
+function updateProtection(now: number) {
+    for (const [userId, hold] of [...volumeHolds]) {
+        const current = MediaEngineStore.getLocalVolume(userId);
+        if (Math.abs(current - hold.applied) >= 0.5) {
+            volumeHolds.delete(userId);
+            mutedByUs.delete(userId);
+            savedVolume.delete(userId);
+            persistHeld();
+            continue;
+        }
+        const next = hold.tick(now, settings.store.autoUnmute * 1000);
+        if (next.done) {
+            unmute(userId, "auto");
+        } else if (!otherGuardHolds(userId) && next.volume !== hold.applied) {
+            hold.applied = next.volume;
+            setLocalVolume(userId, next.volume);
+        }
+    }
+}
+
 function mute(userId: string, score: number) {
     const meter = meters.get(userId);
     if (!settings.store.enabled || !meter || meter.mono || connection?.outputs?.[userId] !== meter.output || isIgnored(userId) || mutedByUs.has(userId) || isLocalMuted(userId)) return;
 
-    savedVolume.set(userId, MediaEngineStore.getLocalVolume(userId));
+    const base = heldBaseline(userId);
+    if (!Number.isFinite(base) || base <= 0) return;
+    savedVolume.set(userId, base);
+    volumeHolds.set(userId, new VolumeHold(base, Date.now(), 200));
     setLocalVolume(userId, 0);
     mutedByUs.set(userId, Date.now());
     persistHeld();
@@ -508,7 +539,11 @@ function mute(userId: string, score: number) {
 function unmute(userId: string, mode: "manual" | "auto" | "silent") {
     if (!mutedByUs.delete(userId)) return;
 
-    setLocalVolume(userId, savedVolume.get(userId) ?? 100);
+    const hold = volumeHolds.get(userId);
+    volumeHolds.delete(userId);
+    if (!otherGuardHolds(userId) && (!hold || Math.abs(MediaEngineStore.getLocalVolume(userId) - hold.applied) < 0.5)) {
+        setLocalVolume(userId, savedVolume.get(userId) ?? 100);
+    }
     savedVolume.delete(userId);
     persistHeld();
 
@@ -526,10 +561,15 @@ function sample(userId: string, meter: Meter, now: number, needed: number) {
     const score = readScore(meter, now);
     meter.score = score >= meter.score ? score : meter.score + (score - meter.score) * RELEASE;
 
+    const ownedFresh = !meter.mono && connection?.outputs?.[userId] === meter.output && now - meter.frameAt.value <= 200;
+    if (ownedFresh) volumeHolds.get(userId)?.observe(score <= Math.max(0, settings.store.threshold / 100 - 0.15), meter.frameAt.value);
+    if (!ownedFresh) { meter.loudTicks = []; return; }
+
     if (score >= settings.store.threshold / 100 && !isIgnored(userId) && !mutedByUs.has(userId) && !isLocalMuted(userId)) {
         meter.loudTicks.push(now);
     }
 
+    if (score < settings.store.threshold / 100) meter.loudTicks = [];
     while (meter.loudTicks.length && now - meter.loudTicks[0] >= WINDOW_MS) meter.loudTicks.shift();
 
     if (meter.loudTicks.length >= needed && now - meter.lastTriggerAt > TRIGGER_COOLDOWN_MS) {
@@ -543,6 +583,7 @@ function poll() {
     try {
         const conn = getConnection();
         if (conn !== connection) {
+            unmuteAll("silent");
             for (const userId of [...meters.keys()]) dropMeter(userId);
             connection = conn;
             levels.clear();
@@ -558,11 +599,8 @@ function poll() {
             if (now - (levelAt.get(userId) ?? 0) >= STALE_MS) levels.set(userId, 0);
         }
 
-        const seconds = settings.store.autoUnmute;
-        if (seconds > 0) {
-            for (const [userId, mutedAt] of [...mutedByUs]) {
-                if (now - mutedAt >= seconds * 1000) unmute(userId, "auto");
-            }
+        for (const userId of [...volumeHolds.keys()]) {
+            if (!conn?.outputs?.[userId] || isIgnored(userId) || isLocalMuted(userId)) unmute(userId, "silent");
         }
 
         void syncCapture();
@@ -581,13 +619,15 @@ function poll() {
 
         const needed = Math.max(1, 11 - Math.round(sensitivity));
         for (const [userId, meter] of meters) sample(userId, meter, now, needed);
+        updateProtection(now);
     } catch (e) {
         logger.error("poll failed", e);
     }
 }
 
 function persistHeld() {
-    void DataStore.set(HELD_KEY, Object.fromEntries(savedVolume)).catch(() => { });
+    const held = Object.fromEntries(savedVolume);
+    persistQueue = persistQueue.then(() => DataStore.set(HELD_KEY, held)).catch(e => logger.error("failed to save held volumes", e));
 }
 
 async function saveIgnored() {
@@ -600,6 +640,7 @@ async function saveIgnored() {
 
 function toggleIgnored(userId: string) {
     if (!ignored.delete(userId)) ignored.add(userId);
+    if (isIgnored(userId)) unmute(userId, "silent");
     void saveIgnored();
 }
 
@@ -746,6 +787,9 @@ export default definePlugin({
         icon: StereoGuardIcon,
         render: StereoGuardButton
     },
+
+    isHolding(userId: string) { return volumeHolds.has(userId); },
+    getHeldBaseline(userId: string) { return savedVolume.get(userId); },
 
     async start() {
         try {

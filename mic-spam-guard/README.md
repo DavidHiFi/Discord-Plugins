@@ -18,7 +18,7 @@ Automatic boosts stop at 200% on Discord's slider. Higher manual volumes remain 
 | Extreme loudness protection | Independently enable sustained-extreme muting. |
 | Extreme loudness threshold | Range 90 to 100. Default 98. Everyday loud speech is handled by balancing. |
 | Mute sensitivity | Higher reacts sooner. Normal or quiet samples reset the consecutive-extreme count. |
-| Auto unmute | Time extreme loudness must stop before restoration. Off requires manual unmute. |
+| Auto unmute | Continuous fresh safe voice audio required before a 1.5-second return to the saved volume. Off requires manual restore. |
 | Dynamic User Volume | Independently enable smooth voice balancing. |
 | Voice level | Target 55 to 75. Default 65. Higher preserves more loudness. |
 | Maximum volume reduction | Cap of 3 to 18 dB below the manual baseline. Default 12 dB. |
@@ -53,3 +53,9 @@ MIT. DavidHiFi.
 ## Participant identity
 
 The guard requires a current voice member and consistent participant-key, SSRC and explicit user identities. Conflicting, missing, malformed, self and outgoing identities are ignored before volume or mute actions. SSRC lookup failures do not fall back to a guessed target. The master repository's regression suite reproduces wrong-user cases. These offline checks do not establish that the running client has loaded the correction.
+
+## Continuous protection
+
+Extreme protection writes your local user-volume setting to zero. It keeps the original baseline and continues reading only that participant's incoming statistics. A hold opens only after fresh, positive voice readings stay at least 10 meter points below the trigger threshold for the configured Auto unmute interval. Missing or zero readings cannot prove safety because some clients report post-volume silence. Brief natural pauses preserve the safe interval only while a recent positive reading remains fresh; a gap longer than two seconds restarts the interval. If the client stops reporting source levels at zero, use manual Restore after checking the participant.
+
+Volume returns over 1.5 seconds. A new unsafe sample closes the recovery and requires the complete safe interval again. Ordinary voice balancing remains independent. Manual volume changes remain intact. The two guards share their held baseline so one cannot turn up a user the other still protects. No audio classifier can establish whether a loud source is speech, noise or a deliberate sound effect from scalar levels alone.

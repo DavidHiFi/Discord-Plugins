@@ -47,9 +47,9 @@ Vencord and Equicord compatibility depends on the plugin's imports and client AP
 
 ## Current validation
 
-Sources were synchronized from the maintained client checkout on 2026-09-30. MicSpamGuard passes 40 offline behavior checks. VoiceVUMeters passes 22 offline PCM, pan and identity checks. StereoGuard passes its offline attribution and cleanup checks. Targeted lint and isolated desktop and Equibop builds passed.
+Sources were synchronized from the maintained client checkout on 2026-09-30. MicSpamGuard passes 49 offline behavior checks. VoiceVUMeters passes 29 offline PCM, pan, identity and peak checks. StereoGuard passes 9 hold/recovery checks alongside the shared attribution and cleanup checks. Targeted lint and isolated desktop and Equibop builds passed.
 
-This build of all three plugins has been running in the maintainer's Discord since 2026-09-30, and each started without errors. The maintainer confirmed that their own meter separates hard-left and hard-right input. Discord Desktop gives one level per remote participant. VoiceVUMeters shows that level in two bars, following your local pan for that person. It cannot measure a remote participant's own stereo. StereoGuard does not mute anyone based on a shared output-device mix.
+Previous combined builds of all three plugins started without matching errors. The latest guard recovery build was installed and loaded through one authorized restart on 2026-09-30. All three audio plugins logged a clean start, and the saved guard settings stayed unchanged. A live blast/recovery scenario has not been exercised for this build. The maintainer confirmed that their own meter separates hard-left and hard-right input. Discord Desktop gives one level per remote participant. VoiceVUMeters shows that level in two bars, following your local pan for that person. It cannot measure a remote participant's own stereo. StereoGuard does not mute anyone based on a shared output-device mix.
 
 MicSpamGuard rejects conflicting participant keys, SSRC owners and explicit user identities before any mute or volume write. Self, outgoing and unidentified samples cannot target another participant. Reproduce its checks from this repository with `npm install` and `npm test`. The tests use synthetic samples and a cached Discord volume-conversion fixture, not a running client.
 
@@ -58,3 +58,7 @@ MicSpamGuard rejects conflicting participant keys, SSRC owners and explicit user
 The former standalone repositories are archived with links here. Their original commit histories are retained in this repository under `history/<plugin>-2026-09-30` tags. The master repository's existing history is preserved through the rename. Future plugin changes belong here.
 
 Each folder retains its license and upstream attribution. The collection contains both MIT and GPL-3.0-or-later code; there is no single MIT license for the whole collection. See each folder's `LICENSE` and source headers. The Discord theme MochaCord remains a separate theme project.
+
+## Guard recovery update
+
+MicSpamGuard and StereoGuard use local volume holds, fresh safe evidence, separate trigger/release thresholds and a 1.5-second recovery. Missing samples cannot reopen a held user. A renewed blast or stereo violation immediately closes recovery. The published tests include 49 MicSpamGuard checks and 9 StereoGuard hold/recovery checks. `npm test` runs both. See each guard's README for zero-reading and native stereo limits.

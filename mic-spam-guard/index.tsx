@@ -19,6 +19,8 @@ import definePlugin, { makeRange, OptionType } from "@utils/types";
 import { findByCodeLazy, findByPropsLazy } from "@webpack";
 import { Button, MediaEngineStore, React, RelationshipStore, SelectedChannelStore, showToast, Toasts, UserStore, VoiceStateStore } from "@webpack/common";
 
+import { VolumeHold } from "./protection";
+
 const logger = new Logger("MicSpamGuard");
 
 const IGNORED_KEY = "MicSpamGuard_ignored";
@@ -67,6 +69,7 @@ const levelAt = new Map<string, number>();
 const loudAt = new Map<string, number[]>();
 const lastTriggerAt = new Map<string, number>();
 const mutedByUs = new Map<string, number>();
+const volumeHolds = new Map<string, VolumeHold>();
 const turnedDown = new Map<string, TurnedDown>();
 const ignored = new Set<string>();
 const savedVolume = new Map<string, number>();
@@ -130,7 +133,7 @@ const settings = definePluginSettings({
     autoUnmute: {
         type: OptionType.SELECT,
         displayName: "Auto unmute",
-        description: "How long extreme loudness must stop before their manual volume is restored. Off requires a manual unmute.",
+        description: "How long fresh safe voice audio must continue before volume returns smoothly. Silence or missing samples cannot reopen a held volume. Off requires manual restore.",
         hidden: () => !settings.store.autoMute,
         options: [
             { label: "Off (stay muted)", value: 0 },
@@ -322,12 +325,44 @@ function readInbound(payload: any): InboundSample[] {
     return samples;
 }
 
+function otherGuardHolds(userId: string): boolean {
+    return Boolean((plugins.StereoGuard as any)?.isHolding?.(userId));
+}
+
+function heldBaseline(userId: string): number {
+    const other = (plugins.StereoGuard as any)?.getHeldBaseline?.(userId);
+    return Number.isFinite(other) && other >= 0 ? other : MediaEngineStore.getLocalVolume(userId);
+}
+
+function updateProtection(now: number) {
+    for (const [userId, hold] of [...volumeHolds]) {
+        const current = MediaEngineStore.getLocalVolume(userId);
+        if (Math.abs(current - hold.applied) >= 0.5) {
+            volumeHolds.delete(userId);
+            mutedByUs.delete(userId);
+            savedVolume.delete(userId);
+            persistHeld();
+            continue;
+        }
+        const next = hold.tick(now, settings.store.autoUnmute * 1000);
+        if (next.done) {
+            unmute(userId, "auto");
+        } else if (!otherGuardHolds(userId) && next.volume !== hold.applied) {
+            hold.applied = next.volume;
+            setLocalVolume(userId, next.volume);
+        }
+    }
+}
+
 function mute(userId: string, level: number) {
     if (!settings.store.autoMute) return;
     if (mutedByUs.has(userId) || isLocalMuted(userId)) return;
 
     restoreVolume(userId, "silent");
-    savedVolume.set(userId, MediaEngineStore.getLocalVolume(userId));
+    const base = heldBaseline(userId);
+    if (!Number.isFinite(base) || base <= 0) return;
+    savedVolume.set(userId, base);
+    volumeHolds.set(userId, new VolumeHold(base, Date.now(), 2000));
     setLocalVolume(userId, 0);
     mutedByUs.set(userId, Date.now());
     persistHeld();
@@ -341,7 +376,11 @@ function mute(userId: string, level: number) {
 function unmute(userId: string, mode: "manual" | "auto" | "silent") {
     if (!mutedByUs.delete(userId)) return;
 
-    setLocalVolume(userId, savedVolume.get(userId) ?? 100);
+    const hold = volumeHolds.get(userId);
+    volumeHolds.delete(userId);
+    if (!otherGuardHolds(userId) && (!hold || Math.abs(MediaEngineStore.getLocalVolume(userId) - hold.applied) < 0.5)) {
+        setLocalVolume(userId, savedVolume.get(userId) ?? 100);
+    }
     savedVolume.delete(userId);
     persistHeld();
 
@@ -379,7 +418,7 @@ function updateDynamics(now: number) {
     if (!settings.store.enabled || !settings.store.dynamicUserVolume) return;
 
     for (const [userId, entry] of [...turnedDown]) {
-        if (isIgnored(userId) || isLocalMuted(userId)) {
+        if (isIgnored(userId) || isLocalMuted(userId) || otherGuardHolds(userId)) {
             restoreVolume(userId, "silent");
             continue;
         }
@@ -442,7 +481,8 @@ function onStats(payload: any) {
         levels.set(userId, percent);
         levelAt.set(userId, now);
 
-        if (mutedByUs.has(userId) && percent >= threshold) mutedByUs.set(userId, now);
+        // A zero reading while held can be post-volume silence. Require safe positive source audio.
+        if (amplitude > 0) volumeHolds.get(userId)?.observe(percent <= threshold - 10, now);
 
         if (!enabled) continue;
 
@@ -496,7 +536,11 @@ function bindConnection(conn: VoiceConnection | null) {
     if (conn === boundConnection) return;
 
     boundConnection?.emitter?.off?.("stats", onStats);
+    unmuteAll("silent");
     restoreAll("silent");
+    loudAt.clear();
+    levels.clear();
+    levelAt.clear();
     pausedDynamics.clear();
     boundConnection = conn;
     conn?.emitter?.on?.("stats", onStats);
@@ -510,6 +554,9 @@ function poll() {
 
         const now = Date.now();
         const members = new Set(currentVoiceMembers());
+        for (const userId of [...volumeHolds.keys()]) {
+            if (!members.has(userId) || isIgnored(userId) || isLocalMuted(userId)) unmute(userId, "silent");
+        }
         for (const userId of [...turnedDown.keys()]) {
             if (!members.has(userId)) restoreVolume(userId, "silent");
         }
@@ -527,12 +574,7 @@ function poll() {
 
         updateDynamics(now);
 
-        const seconds = settings.store.autoUnmute;
-        if (seconds > 0) {
-            for (const [userId, mutedAt] of [...mutedByUs]) {
-                if (now - mutedAt >= seconds * 1000) unmute(userId, "auto");
-            }
-        }
+        updateProtection(now);
     } catch (e) {
         logger.error("poll failed", e);
     }
@@ -707,6 +749,9 @@ export default definePlugin({
         icon: MicSpamGuardIcon,
         render: MicSpamGuardButton
     },
+
+    isHolding(userId: string) { return volumeHolds.has(userId); },
+    getHeldBaseline(userId: string) { return savedVolume.get(userId); },
 
     async start() {
         try {

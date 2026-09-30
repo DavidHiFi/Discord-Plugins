@@ -5,7 +5,8 @@ const esbuild = require("esbuild");
 
 const sourcePath = require("node:path").join(__dirname, "../mic-spam-guard/index.tsx");
 const source = fs.readFileSync(sourcePath, "utf8").replace(/^import .*;\r?\n/gm, "").replace("export default definePlugin(", "globalThis.plugin = definePlugin(");
-const code = esbuild.transformSync(source, { loader: "tsx", format: "cjs" }).code;
+const holdSource = fs.readFileSync(require("node:path").join(__dirname, "../mic-spam-guard/protection.ts"), "utf8").replace("export class VolumeHold", "class VolumeHold");
+const code = esbuild.transformSync(holdSource + "\n" + source, { loader: "tsx", format: "cjs" }).code;
 const outcomes = [];
 const toRaw = volume => volume === 0 ? 0 : (volume < 100 ? (volume / 100) ** 2.8 : 10 ** ((volume / 100 - 1) * 6 / 20)) * 100;
 const toSlider = raw => raw === 0 ? 0 : (raw < 100 ? (raw / 100) ** (1 / 2.8) : 20 * Math.log10(raw / 100) / 6 + 1) * 100;
@@ -51,7 +52,7 @@ function setup(initial = {}) {
     const run = expr => vm.runInContext(expr, sandbox);
     const stats = payload => { sandbox.payload = payload; run("onStats(payload)"); };
     const sample = (db, user = "2") => stats({ rtp: { inbound: { [user]: { audioLevel: db === -Infinity ? 0 : 10 ** (db / 20) } } } });
-    const advance = ms => { for (let i = 0; i < ms; i += 100) { now += Math.min(100, ms - i); run("updateDynamics(Date.now())"); } };
+    const advance = ms => { for (let i = 0; i < ms; i += 100) { now += Math.min(100, ms - i); run("updateProtection(Date.now()); updateDynamics(Date.now())"); } };
     const speech = (db, ms, user = "2") => { for (let i = 0; i < ms; i += 100) { sample(db, user); advance(100); } };
     return { run, sample, stats, advance, speech, store, volumes, writes, persisted, muted, friends, members, plugin: sandbox.plugin };
 }
@@ -276,11 +277,60 @@ async function test(name, body) {
         const t = setup(); t.store.autoMute = true; t.store.threshold = 70;
         t.speech(-6, 5000); assert(t.volumes.get("2")>0);
     });
-    await test("Auto unmute waits for extreme loudness to stop and restores the baseline", () => {
-        const t=setup({"2":155}); t.store.autoMute=true; t.store.autoUnmute=3;
-        t.speech(0, 1000); assert.equal(t.volumes.get("2"),0);
-        t.advance(2500); t.sample(0); t.run("poll()"); assert.equal(t.volumes.get("2"),0);
-        t.advance(3100); t.run("poll()"); assert.equal(t.volumes.get("2"),155);
+    await test("Fresh safe speech restores protection smoothly after the configured hold", () => {
+        const t=setup({"2":155});t.run("poll()");t.store.autoMute=true;t.store.autoUnmute=3;t.store.dynamicUserVolume=false;
+        t.speech(0,1000);assert.equal(t.volumes.get("2"),0);
+        t.advance(10000);t.run("poll()");assert.equal(t.volumes.get("2"),0);
+        t.speech(-20,3000);assert.equal(t.volumes.get("2"),0);
+        t.speech(-20,500);assert(t.volumes.get("2")>0 && t.volumes.get("2")<100);
+        t.speech(-20,1200);assert.equal(t.volumes.get("2"),155);
+    });
+    await test("Continuous blasts cannot periodically reopen a held volume", () => {
+        const t=setup();t.run("poll()");t.store.autoMute=true;t.store.autoUnmute=3;
+        t.speech(0,1000);const count=t.writes.length;t.speech(0,30000);
+        assert.equal(t.volumes.get("2"),0);assert(t.writes.slice(count).every(w=>w.value===0));
+    });
+    await test("Zero and missing readings cannot falsely prove safe speech", () => {
+        const t=setup();t.run("poll()");t.store.autoMute=true;t.store.autoUnmute=3;
+        t.speech(0,1000);t.speech(-Infinity,12000);t.advance(12000);
+        assert.equal(t.volumes.get("2"),0);
+    });
+    await test("A returning blast closes partial recovery before the next full-volume write", () => {
+        const t=setup();t.run("poll()");t.store.autoMute=true;t.store.autoUnmute=3;t.store.dynamicUserVolume=false;
+        t.speech(0,1000);t.speech(-20,3600);assert(t.volumes.get("2")>0);
+        t.speech(0,100);assert.equal(t.volumes.get("2"),0);
+        t.speech(-20,2000);assert.equal(t.volumes.get("2"),0);
+    });
+    await test("Brief natural speech pauses do not reset verified safe recovery", () => {
+        const t=setup();t.run("poll()");t.store.autoMute=true;t.store.autoUnmute=3;t.store.dynamicUserVolume=false;
+        t.speech(0,1000);t.speech(-20,2000);t.speech(-Infinity,500);t.speech(-20,2200);
+        assert.equal(t.volumes.get("2"),100);
+    });
+    await test("Evidence gaps restart the complete safe interval", () => {
+        const t=setup();t.run("poll()");t.store.autoMute=true;t.store.autoUnmute=3;
+        t.speech(0,1000);t.speech(-20,2500);t.advance(2500);t.speech(-20,1500);
+        assert.equal(t.volumes.get("2"),0);
+    });
+    await test("Another guard owns suppression without losing the original baseline", () => {
+        const t=setup();t.run("poll()");t.store.autoMute=true;t.store.autoUnmute=3;
+        t.run("plugins.StereoGuard={isHolding:()=>true,getHeldBaseline:()=>175}");
+        t.speech(0,1000);assert.equal(t.run("savedVolume.get('2')"),175);
+        t.speech(-20,6000);assert.equal(t.volumes.get("2"),0);
+    });
+    await test("Auto restore off never raises volume despite continuous safe speech", () => {
+        const t=setup();t.run("poll()");t.store.autoMute=true;t.store.autoUnmute=0;
+        t.speech(0,1000);t.speech(-20,20000);assert.equal(t.volumes.get("2"),0);
+    });
+    await test("Duplicated timestamps cannot fabricate continuing safe evidence", () => {
+        const t=setup();t.run("poll()");t.store.autoMute=true;t.store.autoUnmute=3;
+        t.speech(0,1000);t.sample(-20);const at=t.run("Date.now()");
+        for(let i=0;i<50;i++){t.run(`volumeHolds.get("2").observe(true, ${at})`);t.advance(100);}
+        assert.equal(t.volumes.get("2"),0);
+    });
+    await test("Manual volume changes during protection remain the user's choice", () => {
+        const t=setup();t.run("poll()");t.store.autoMute=true;t.speech(0,1000);
+        t.volumes.set("2",137);t.advance(100);
+        assert.equal(t.volumes.get("2"),137);assert.equal(t.run("volumeHolds.size"),0);
     });
     await test("Disabling protection restores its mute and keeps balancing enabled", () => {
         const t=setup(); t.store.autoMute=true; t.speech(0,1000);

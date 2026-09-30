@@ -9,3 +9,9 @@ Discord Desktop does not expose remote per-participant PCM through its public vo
 Copy this folder to `src/userplugins/StereoGuard` and build your client. The 2026-09-30 attribution correction passed 21 shared offline regression checks, targeted lint and isolated desktop/Equibop builds. Live activation and Ableton hard-pan verification are pending.
 
 MIT. Original plugin by Kurtzon Audio; maintained by DavidHiFi. See LICENSE.
+
+## Continuous protection
+
+Protection holds local user volume at zero without changing Discord's local-mute toggle. A participant-owned stream continues supplying detection frames. Fresh frames must stay at least 15 score points below the trigger threshold for the configured Auto unmute interval. Silence counts only when actual fresh frames arrive from that participant's stream. Missing frames never count as quiet. The volume then returns over 1.5 seconds. A stereo relapse immediately closes partial recovery. Disconnected streams and ignored users release their saved volume, and manual changes remain intact. Another guard's hold prevents this guard from raising the user.
+
+On Discord Desktop, remote per-user PCM is unavailable through the current native wrapper. Shared output capture is informational and cannot safely drive participant-specific protection. This correction does not create native remote stereo measurement.
