@@ -81,14 +81,6 @@
       "installTarget": "src/testcordplugins/PanelLayout",
       "license": "GPL-3.0-or-later",
       "description": "The maintained TestCord panel layout, including the ping-freshness fix."
-    },
-    {
-      "folder": "full-vc-pfp",
-      "name": "FullVCPFP",
-      "source": "full-vc-pfp",
-      "installTarget": "src/equicordplugins/fullVcPfp",
-      "license": "GPL-3.0-or-later",
-      "description": "Maintained full-avatar call tiles and membership fixes."
     }
   ]
 }

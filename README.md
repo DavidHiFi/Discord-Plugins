@@ -24,15 +24,14 @@ Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/
 | [VoiceVUMeters](voice-vu-meters/) | Real channel meters where streams are available; desktop remote bars follow your local pan. | `src/userplugins/VoiceVUMeters` |
 | [HasStrip](has-strip/) | Removes costly :has() stylesheet rules, with visual tradeoffs. | `src/testcordplugins/HasStrip` |
 | [PanelLayout](panel-layout/) | The maintained TestCord panel layout, including the ping-freshness fix. | `src/testcordplugins/PanelLayout` |
-| [FullVCPFP](full-vc-pfp/) | Maintained full-avatar call tiles and membership fixes. | `src/equicordplugins/fullVcPfp` |
 
-Every plugin here was written or changed by DavidHiFi. Forks keep their original authors and license, so preserve both when sharing changes. `plugins.json` lists the source folder, destination and license for each entry.
+This collection contains custom implementations and forks with local changes. The duplicate FullVCPFP folder was removed on 2026-10-01; RoundedVCPFP retains the avatar fixes and configurable rounding. Forks keep their original authors and license, so preserve both when sharing changes. `plugins.json` lists the source folder, destination and license for each entry.
 
 ## Install
 
 Use a TestCord source checkout. Choose the plugins you want and copy the contents of the source folders listed in `plugins.json` into their destination folders. Copy all source files, including CSS and native helpers. For example, copy `fakevoice/index.tsx` and `fakevoice/native.ts` into `src/userplugins/fakevoice/`. The optional Stream Deck companion lives in `fakevoice/streamdeck/`.
 
-For LyricsStatus, copy `better-lyrics-sync/src/lyricsStatus/`. For Custom Stream Quality, copy `custom-stream-quality/src/`. Those two and PanelLayout replace existing TestCord plugin folders, so back up the old source first. FullVCPFP replaces the Equicord plugin bundled with TestCord. Do not enable FullVCPFP and RoundedVcPfp together.
+For LyricsStatus, copy `better-lyrics-sync/src/lyricsStatus/`. For Custom Stream Quality, copy `custom-stream-quality/src/`. Those two and PanelLayout replace existing TestCord plugin folders, so back up the old source first. RoundedVCPFP is the maintained avatar fork in this collection. Disable the client's bundled FullVCPFP before enabling RoundedVCPFP.
 
 From the client checkout, build with its documented commands. For the current TestCord tree:
 
@@ -52,6 +51,10 @@ Sources were synchronized from the maintained client checkout on 2026-09-30. Mic
 Previous combined builds of all three plugins started without matching errors. The latest guard recovery build was installed and loaded through one authorized restart on 2026-09-30. All three audio plugins logged a clean start, and the saved guard settings stayed unchanged. A live blast/recovery scenario has not been exercised for this build. The maintainer confirmed that their own meter separates hard-left and hard-right input. Discord Desktop gives one level per remote participant. VoiceVUMeters shows that level in two bars, following your local pan for that person. It cannot measure a remote participant's own stereo. StereoGuard does not mute anyone based on a shared output-device mix.
 
 MicSpamGuard rejects conflicting participant keys, SSRC owners and explicit user identities before any mute or volume write. Self, outgoing and unidentified samples cannot target another participant. Reproduce its checks from this repository with `npm install` and `npm test`. The tests use synthetic samples and a cached Discord volume-conversion fixture, not a running client.
+
+## Plugin origins
+
+[PROVENANCE.md](PROVENANCE.md) records each plugin's origin and the local changes that justify its inclusion.
 
 ## History and licenses
 

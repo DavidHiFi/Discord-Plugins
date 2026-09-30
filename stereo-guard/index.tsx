@@ -1,6 +1,7 @@
 /* eslint-disable simple-header/header -- This standalone user plugin is MIT licensed. */
 /*
  * StereoGuard
+ * Copyright (c) 2026 Kurtzon Audio
  * Copyright (c) 2026 DavidHiFi
  * SPDX-License-Identifier: MIT
  */
@@ -777,7 +778,7 @@ function StereoGuardButton({ iconForeground, hideTooltips, nameplate }: UserArea
 export default definePlugin({
     name: "StereoGuard",
     description: "Locally mutes anyone whose audio is obnoxiously in stereo: hard panned, panning around, or wide stereo music.",
-    authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
+    authors: [{ name: "Kurtzon", id: 1253545207488839784n }, { name: "DavidHiFi", id: 1553713171938938891n }],
     tags: ["Voice", "Utility"],
     enabledByDefault: true,
     settings,

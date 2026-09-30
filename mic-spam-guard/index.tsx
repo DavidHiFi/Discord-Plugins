@@ -1,6 +1,7 @@
 /* eslint-disable simple-header/header -- This standalone user plugin is MIT licensed. */
 /*
  * MicSpamGuard
+ * Copyright (c) 2026 Kurtzon Audio
  * Copyright (c) 2026 DavidHiFi
  * SPDX-License-Identifier: MIT
  *
@@ -739,7 +740,7 @@ function MicSpamGuardButton({ iconForeground, hideTooltips, nameplate }: UserAre
 export default definePlugin({
     name: "MicSpamGuard",
     description: "Smoothly balances voice volumes and protects the call from sustained extreme loudness.",
-    authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
+    authors: [{ name: "Kurtzon", id: 1253545207488839784n }, { name: "DavidHiFi", id: 1553713171938938891n }],
     tags: ["Voice", "Utility"],
     enabledByDefault: true,
     settings,
