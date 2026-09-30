@@ -64,7 +64,7 @@
       "source": "voice-vu-meters",
       "installTarget": "src/userplugins/VoiceVUMeters",
       "license": "MIT",
-      "description": "Real channel meters where streams are available, with a desktop mono fallback."
+      "description": "Real channel meters where streams are available; desktop remote bars follow your local pan."
     },
     {
       "folder": "has-strip",

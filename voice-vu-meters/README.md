@@ -8,7 +8,7 @@ Web audio clients expose a stream for each participant. The plugin splits that s
 
 On Discord Desktop, your own meter opens the exact selected input device with echo cancellation, noise suppression and automatic gain control disabled for the meter capture. It measures the input before Discord encoding. Receiving-side measurement is needed to confirm the transmitted channel layout. The capture is silent and closes when you leave the call, stop the plugin, change input devices or disable Show Self.
 
-Discord Desktop exposes one scalar level for each remote participant. Those participants show one bar with a tooltip explaining the limitation. The plugin cannot derive their channel separation from that scalar. It does not duplicate the scalar into two apparent stereo bars or assign a shared audio mix to a participant.
+Discord Desktop exposes one scalar level for each remote participant. Their two bars carry that level through your local pan for that user, so a user you pan hard left drops out of the right bar. Their tooltip says so. The plugin cannot measure a remote participant's own channel separation on desktop and does not assign a shared audio mix to anyone.
 
 ## Settings
 
@@ -22,4 +22,4 @@ Discord Desktop exposes one scalar level for each remote participant. Those part
 
 Place the folder in `src/userplugins/VoiceVUMeters` and build your client. Activate the rebuilt payload when a client reload is permitted.
 
-The 2026-09-30 correction passed offline PCM and identity regression checks and isolated desktop and Equibop builds. Live activation and Ableton hard-pan verification are pending under the user's offline-only instruction. Remote desktop per-user stereo requires an audio source exposing each participant's samples.
+The 2026-09-30 build passes 22 offline PCM, pan and identity regression checks plus isolated desktop and Equibop builds. The user confirmed live that their own meter separates Ableton hard-left and hard-right input. Remote desktop per-user stereo would need an audio source exposing each participant's samples.

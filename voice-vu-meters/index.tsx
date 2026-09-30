@@ -357,6 +357,26 @@ function isHeard(userId: string) {
     return flags[userId] !== 0;
 }
 
+// Discord Desktop only reports one level per remote user, so their two bars come from the
+// same gains the client's mixer uses. A user you have panned hard left goes quiet on the right.
+function getPan(userId: string): [number, number] {
+    try {
+        const pan = MediaEngineStore.getLocalPan?.(userId);
+        if (pan && Number.isFinite(pan.left) && Number.isFinite(pan.right)) {
+            return [Math.max(0, pan.left), Math.max(0, pan.right)];
+        }
+    } catch (e) {
+        // fall through to centered
+    }
+
+    const local = connection?.localPans?.[userId];
+    if (local && Number.isFinite(local.left) && Number.isFinite(local.right)) {
+        return [Math.max(0, local.left), Math.max(0, local.right)];
+    }
+
+    return [1, 1];
+}
+
 function normalize(amplitude: number, floorDb: number) {
     const db = 20 * Math.log10(Math.max(amplitude, 1e-5));
     return Math.max(0, Math.min(1, (db - floorDb) / -floorDb));
@@ -426,14 +446,16 @@ function tick() {
             if (meter.tap) {
                 const muted = meter.ownsInput && MediaEngineStore.isSelfMute();
                 const left = muted ? { rms: 0, peak: 0 } : readChannel(meter.tap.left, meter.tap.bufLeft, floorDb);
-                const right = muted ? { rms: 0, peak: 0 } : readChannel(meter.tap.right, meter.tap.bufRight, floorDb);
+                const right = muted || meter.mono ? left : readChannel(meter.tap.right, meter.tap.bufRight, floorDb);
 
                 smooth(meter, 0, left, now);
                 smooth(meter, 1, right, now);
             } else {
                 const value = isHeard(userId) ? normalize(meter.amplitude, floorDb) : 0;
-                smooth(meter, 0, { rms: value, peak: value }, now);
-                smooth(meter, 1, { rms: 0, peak: 0 }, now);
+                const [panL, panR] = getPan(userId);
+
+                smooth(meter, 0, { rms: value * panL, peak: value * panL }, now);
+                smooth(meter, 1, { rms: value * panR, peak: value * panR }, now);
             }
         }
 
@@ -496,19 +518,20 @@ const VoiceMeter = ErrorBoundary.wrap(({ userId, height = BAR_HEIGHT, width = BA
     const { display, peak } = meter;
     const { showPeak } = settings.store;
     const gap = Math.max(2, Math.round(width / 2));
+    const measured = meter.tap != null && !meter.mono;
+    const title = meter.ownsInput
+        ? "Your selected input before Discord encoding. Left | Right"
+        : measured
+            ? "Participant audio channels. Left | Right"
+            : "Left | Right after your local pan. Discord Desktop reports one level per participant, so both bars carry it.";
 
     return (
-        <div style={{ display: "flex", alignItems: "stretch", height, ...style }} data-vu-meter={meter.tap && !meter.mono ? "lr" : "mono"} title={meter.ownsInput ? "Selected input before Discord encoding, Left | Right" : meter.tap ? "Participant audio channels" : "Mono level. Discord Desktop does not expose this participant's left/right samples."}>
+        <div style={{ display: "flex", alignItems: "stretch", height, ...style }} data-vu-meter={measured ? "lr" : "level"} title={title}>
             <MeterBar width={width} value={display[0]} peak={peak[0]} showPeak={showPeak} />
-            {meter.tap && !meter.mono && <>
-            <div
-                title="Left | Right"
-                style={{ width: gap, display: "flex", alignItems: "stretch", justifyContent: "center" }}
-            >
+            <div style={{ width: gap, display: "flex", alignItems: "stretch", justifyContent: "center" }}>
                 <div style={{ width: 1, background: "rgba(235,235,235,0.6)", borderRadius: 1 }} />
             </div>
             <MeterBar width={width} value={display[1]} peak={peak[1]} showPeak={showPeak} />
-            </>}
         </div>
     );
 }, { noop: true });
@@ -525,7 +548,7 @@ function TileMeter({ userId }: { userId?: string; }) {
 
 export default definePlugin({
     name: "VoiceVUMeters",
-    description: "Draws per-user voice meters with separate left and right bars and a divider when channel samples are available.",
+    description: "Draws left and right voice meters with a divider next to everyone in your voice channel and on call tiles.",
     authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
     tags: ["Voice", "Utility"],
     enabledByDefault: true,

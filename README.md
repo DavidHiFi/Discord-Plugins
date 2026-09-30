@@ -21,7 +21,7 @@ Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/
 | [RoundedVcPfp](rounded-vc-pfp/) | Rounded full-resolution avatars on call tiles. | `src/userplugins/RoundedVcPfp` |
 | [MicSpamGuard](mic-spam-guard/) | Gentle voice balancing and sustained extreme-loudness protection. | `src/userplugins/MicSpamGuard` |
 | [StereoGuard](stereo-guard/) | Stereo detection for known per-participant streams; no guessed output-mix mutes. | `src/userplugins/StereoGuard` |
-| [VoiceVUMeters](voice-vu-meters/) | Real channel meters where streams are available, with a desktop mono fallback. | `src/userplugins/VoiceVUMeters` |
+| [VoiceVUMeters](voice-vu-meters/) | Real channel meters where streams are available; desktop remote bars follow your local pan. | `src/userplugins/VoiceVUMeters` |
 | [HasStrip](has-strip/) | Removes costly :has() stylesheet rules, with visual tradeoffs. | `src/testcordplugins/HasStrip` |
 | [PanelLayout](panel-layout/) | The maintained TestCord panel layout, including the ping-freshness fix. | `src/testcordplugins/PanelLayout` |
 | [FullVCPFP](full-vc-pfp/) | Maintained full-avatar call tiles and membership fixes. | `src/equicordplugins/fullVcPfp` |
@@ -47,9 +47,9 @@ Vencord and Equicord compatibility depends on the plugin's imports and client AP
 
 ## Current validation
 
-Sources were synchronized from the maintained client checkout on 2026-09-30. MicSpamGuard passed 40 offline behavior checks. VoiceVUMeters and StereoGuard passed 21 offline PCM, attribution and cleanup checks. Targeted lint and isolated desktop and Equibop builds passed for these corrections.
+Sources were synchronized from the maintained client checkout on 2026-09-30. MicSpamGuard passes 40 offline behavior checks. VoiceVUMeters passes 22 offline PCM, pan and identity checks. StereoGuard passes its offline attribution and cleanup checks. Targeted lint and isolated desktop and Equibop builds passed.
 
-These audio corrections are staged source changes. Their current live activation is unverified. VoiceVUMeters can measure separate channels for browser participant streams and the selected desktop input before encoding. Desktop remote participants expose a scalar level and show one bar. StereoGuard does not mute a guessed participant from a shared output-device mix. Live Ableton hard-pan and transmitted-channel verification remain pending.
+This build of all three plugins has been running in the maintainer's Discord since 2026-09-30, and each started without errors. The maintainer confirmed that their own meter separates hard-left and hard-right input. Discord Desktop gives one level per remote participant. VoiceVUMeters shows that level in two bars, following your local pan for that person. It cannot measure a remote participant's own stereo. StereoGuard does not mute anyone based on a shared output-device mix.
 
 MicSpamGuard rejects conflicting participant keys, SSRC owners and explicit user identities before any mute or volume write. Self, outgoing and unidentified samples cannot target another participant. Reproduce its checks from this repository with `npm install` and `npm test`. The tests use synthetic samples and a cached Discord volume-conversion fixture, not a running client.
 
