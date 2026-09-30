@@ -8,7 +8,7 @@ DavidHiFi's maintained Discord client plugins, forks and companion tools in one 
 git clone https://github.com/DavidHiFi/Discord-Plugins.git
 ```
 
-Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/heads/main.zip). The release ZIP contains the same files. No submodule commands or separate plugin repositories are required.
+Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/heads/main.zip). No submodule commands or separate plugin repositories are required.
 
 ## Plugins
 
@@ -25,10 +25,8 @@ Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/
 | [HasStrip](has-strip/) | Removes costly :has() stylesheet rules, with visual tradeoffs. | `src/testcordplugins/HasStrip` |
 | [PanelLayout](panel-layout/) | The maintained TestCord panel layout, including the ping-freshness fix. | `src/testcordplugins/PanelLayout` |
 | [FullVCPFP](full-vc-pfp/) | Maintained full-avatar call tiles and membership fixes. | `src/equicordplugins/fullVcPfp` |
-| [NoMirroredCamera](no-mirrored-camera/) | Bundled upstream camera-preview mirroring override. | `src/equicordplugins/noMirroredCamera` |
-| [ZakFakeMuteDeafen](zak-fake-mute-deafen/) | Bundled upstream fake mute/deafen alternative. | `src/userplugins/zakFakeMuteDeafen` |
 
-The collection includes David's changes and credited upstream plugins. NoMirroredCamera and ZakFakeMuteDeafen are bundled upstream copies. Preserve each plugin's authors and license when sharing changes. `plugins.json` lists the source folder, destination and license for each entry.
+Every plugin here was written or changed by DavidHiFi. Forks keep their original authors and license, so preserve both when sharing changes. `plugins.json` lists the source folder, destination and license for each entry.
 
 ## Install
 

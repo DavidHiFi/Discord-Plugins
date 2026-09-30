@@ -6,7 +6,7 @@ This is a source plugin for [TestCord](https://github.com/TestcordDev/TestCord),
 
 ## Install
 
-You need a source checkout of your client, Node.js, and the pnpm version required by that checkout. The [latest release ZIP](https://github.com/DavidHiFi/Discord-Plugins/releases/latest) contains both plugin variants.
+You need a source checkout of your client, Node.js, and the pnpm version required by that checkout. The [collection ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/heads/main.zip) contains both plugin variants.
 
 1. In your client checkout, create `src/userplugins/staffTag/`.
 2. For **TestCord or Equicord**, copy this repository's [`index.tsx`](index.tsx) into that folder. For **Vencord**, copy [`vencord/index.tsx`](vencord/index.tsx) instead. The resulting path must be `<client>/src/userplugins/staffTag/index.tsx`.

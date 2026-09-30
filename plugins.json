@@ -89,22 +89,6 @@
       "installTarget": "src/equicordplugins/fullVcPfp",
       "license": "GPL-3.0-or-later",
       "description": "Maintained full-avatar call tiles and membership fixes."
-    },
-    {
-      "folder": "no-mirrored-camera",
-      "name": "NoMirroredCamera",
-      "source": "no-mirrored-camera",
-      "installTarget": "src/equicordplugins/noMirroredCamera",
-      "license": "GPL-3.0-or-later",
-      "description": "Bundled upstream camera-preview mirroring override."
-    },
-    {
-      "folder": "zak-fake-mute-deafen",
-      "name": "ZakFakeMuteDeafen",
-      "source": "zak-fake-mute-deafen",
-      "installTarget": "src/userplugins/zakFakeMuteDeafen",
-      "license": "GPL-3.0-or-later",
-      "description": "Bundled upstream fake mute/deafen alternative."
     }
   ]
 }
