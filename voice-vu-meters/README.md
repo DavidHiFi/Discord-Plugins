@@ -1,37 +1,31 @@
 # VoiceVUMeters
 
-Per-user vertical voice meters in the channel list and on call tiles. Fork of [Kurtzon Audio's VoiceVUMeters](https://github.com/kurtzonaudio/kurtcord-plugins), maintained as DavidHiFi's copy. MIT licensed.
+Per-participant left/right voice meters, peak markers and a divider in the channel list and on call tiles. Fork of [Kurtzon Audio's VoiceVUMeters](https://github.com/kurtzonaudio/kurtcord-plugins), maintained by DavidHiFi. MIT licensed. The native helper includes MinHook under its own license.
 
 ## Channel measurement
 
-Web audio clients expose a stream for each participant. The plugin splits that stream into separate left and right analysers and shows two bars with a visible divider. Hard-left samples move the left bar; hard-right samples move the right bar. A confirmed mono stream feeds both bars.
+Web audio clients expose a stream for each participant. The plugin splits each stream into left and right channels. On Discord Desktop, your own meter captures the exact selected input before Discord encoding, without echo cancellation, noise suppression or automatic gain control in that capture. It closes when the input changes or the call or plugin stops.
 
-On Discord Desktop, your own meter opens the exact selected input device with echo cancellation, noise suppression and automatic gain control disabled for the meter capture. It measures the input before Discord encoding. Receiving-side measurement is needed to confirm the transmitted channel layout. The capture is silent and closes when you leave the call, stop the plugin, change input devices or disable Show Self.
+Desktop remote stereo requires the companion native bridge. It reads signed 16-bit decoded PCM from a callback that identifies both the connection and participant. It enables the Opus receiver's explicit stereo parameter, which is required in addition to a two-channel codec description. A hard-left sender moves only their left bar. A hard-right sender moves only their right bar. RMS and peaks come from the samples before your local pan. Mono and dual-mono audio can move both bars; equal levels alone are not proof of stereo content.
 
-Discord Desktop exposes one scalar level for each remote participant. Their two bars carry that level through your local pan for that user. A user you pan hard left drops out of the right bar. Their tooltip explains the source. A remote user's own hard pan cannot be measured from that scalar. Desktop remote per-user stereo remains incomplete.
+The helper retains only levels, never participant audio. Stale samples expire. Closed connections and stream-sharing connections cannot supply another call's meters. Production code preserves the native callback, return value and playback flags. It does not change input capture, encoding, device selection, gain or routing. The isolated decoder test has separate input-disable and output-discard controls that are absent from the shipped addon.
 
-Process loopback records Discord's combined output. It cannot separate simultaneous participants or assign channel differences to a person. The experimental loopback helper is not part of this plugin. StereoGuard must only attribute stereo from a stream owned by a known participant.
+The helper accepts only the audited Windows x64 voice binary with SHA256 `4039dcd110a2d2b17672a62f94d11dd5a9a4e59ab2420915ef1362a29467a4a5`. A changed native binary disables the tap. Without the bridge, Desktop falls back to one scalar level through your local pan; its tooltip identifies that limitation. A shared output mix never supplies participant identity.
 
-## Settings
+## Install
 
-| Setting | Effect |
-| --- | --- |
-| Floor | Bottom of the level scale, from -80 to -20 dB. |
-| Show Peak | Holds each channel's peak marker for 1.5 seconds, then falls at 12 dB per second. The marker remains visible at full scale. |
-| Show Self | Capture and meter the selected input on desktop. |
+Copy `index.tsx` into `src/userplugins/VoiceVUMeters` and build your client. The `native` folder is a companion installation, not a TestCord native IPC plugin. For the matching existing DiscordStereoLoader payload, run `native/Install-Bridge.ps1 -AuditOnly`, then `native/Install-Bridge.ps1`. The script verifies the voice binary, backs up the wrapper and copies the bridge. It does not restart Discord. Restart after your call to load both components.
 
-This update enables Show Peak once. Later changes to the setting are respected. Meter release depends on elapsed time, so changes in callback frequency do not change its fall rate.
+To rebuild the helper, use an x64 MSVC C++20 toolchain and CMake. Configure with `-DNODE_INCLUDE_DIR=<folder containing node_api.h>` from Node 24 headers, then build the Release `participant_tap` target. Stable Node-API version 8 avoids an Electron-specific import library. MinHook 1.3.4 source is included; no submodule download is needed. Run `callback_test.exe` and `node native/bridge-test.cjs` for the source-level checks.
 
-## Installation and validation
+## Settings and validation
 
-Place the folder in `src/userplugins/VoiceVUMeters` and build your client. Restart the client to load a rebuilt desktop renderer when its main process caches the renderer text.
+Floor sets the bottom of the meter scale. Show Peak holds each channel's peak for 1.5 seconds, then falls at 12 dB per second. Show Self controls the selected input meter. Two bars and the divider remain visible for mono participants.
 
-The 2026-09-30 peak-marker update passes 29 offline regression checks, targeted ESLint, and isolated full desktop and Equibop builds. The checks cover hard-left/right PCM, dual mono, silence, stale frames, participant identity conflicts, shared-mix attribution, selected input capture and cleanup, the divider, independent channel peaks, peak hold timing and callback frequency. Synthetic PCM checks do not prove live transmitted audio behavior.
+On 2026-10-01, two synthetic participants sent independently encoded, encrypted Opus packets through the actual installed native voice decoder in an isolated process. The left participant reached a left peak of 0.517 with a zero right peak. The right participant reached a right peak of 0.501 with a zero left peak. Connection-owned participant callbacks supplied 492 frames. This verifies the native decoder path, beyond injecting synthetic arrays into the meter.
 
-The user previously confirmed live that their own meter separates Ableton hard-left and hard-right input. The updated desktop renderer was installed with matching hashes and loaded after one authorized restart. Startup logs show all three audio plugins starting without matching warnings or errors. Show Peak and its migration flag are saved as enabled. This run did not verify remote participant stereo or observe the peak marker on screen.
+33 meter/identity/guard regression checks, native metric checks, bridge connection/decoder checks, targeted lint and full Desktop and Equibop builds passed. Both builds retain the current guard sources and their recovery helpers. The bridge and all three plugins loaded successfully in Discord with no matching startup warnings or errors. A live friend's transmitted hard-pan test and a visual peak-marker inspection were not performed. The maintainer previously confirmed their own live Ableton hard pan.
 
 ## Rollback
 
-For the local installation, the pre-update renderer files are in `backups/2026-09-30/voice-stereo-peak`. Restore those files to the desktop dist directory and restart the client through the coordinated activation lane. Installation and startup receipts are in `reports/2026-09-30-voice-stereo`.
-
-No DevTools, foreground shortcuts, focus automation or clipboard injection were used. Ableton, VB-Audio Matrix and Stream Deck retained their process IDs through the Discord restart.
+Restore the backed-up wrapper and renderer files and remove the companion bridge files if they were newly installed. Restart Discord after the call. The local activation backup is `backups/2026-10-01/voice-native-stereo`, with evidence in `reports/2026-10-01-voice-native-stereo`. No DevTools, hotkeys, focus automation or clipboard injection were used. Protected audio processes survived activation.
