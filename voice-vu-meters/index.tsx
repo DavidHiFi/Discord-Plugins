@@ -6,8 +6,8 @@
  * SPDX-License-Identifier: MIT
  *
  * Based on Kurtzon Audio's VoiceVUMeters as shipped in Kurtcord 2.7.5. Adds a level
- * source for Discord Desktop, whose native voice engine has no per-user WebAudio
- * streams, and re-targets the voice list patch at the current client.
+ * source for Discord Desktop using participant PCM from the native stereo bridge,
+ * and re-targets the voice list patch at the current client.
  */
 
 import { definePluginSettings } from "@api/Settings";
@@ -39,7 +39,7 @@ interface VoiceConnection {
     // Web clients (browser, Vesktop): one WebAudio stream per remote user.
     outputs?: Record<string, AudioOutput>;
     audioContext?: AudioContext;
-    // Discord Desktop: native engine, levels only through its stats.
+    // Discord Desktop: native PCM bridge, with scalar stats as a fallback.
     localSpeakingFlags?: Record<string, number>;
     localPans?: Record<string, { left: number; right: number; }>;
     getStats?: () => Promise<any>;
@@ -57,9 +57,25 @@ interface WebTap {
     bufRight: Float32Array<ArrayBuffer>;
 }
 
+interface NativeLevel {
+    userId: string;
+    ageMs: number;
+    channels: number;
+    rmsLeft: number;
+    rmsRight: number;
+    peakLeft: number;
+    peakRight: number;
+}
+
+interface ParticipantBridge {
+    getParticipantStereoLevels(): { installed: boolean; connection: number; levels: NativeLevel[]; };
+}
+
 interface Meter {
     tap?: WebTap;
     amplitude: number;
+    native?: NativeLevel;
+    nativeAvailable?: boolean;
     mono: boolean;
     display: [number, number];
     peak: [number, number];
@@ -83,6 +99,8 @@ let inputPending = false;
 let inputGeneration = 0;
 let inputKey = "";
 let inputRetryAt = 0;
+let participantBridge: ParticipantBridge | undefined;
+let bridgeChecked = false;
 
 const settings = definePluginSettings({
     floorDb: {
@@ -379,6 +397,37 @@ function getPan(userId: string): [number, number] {
     return [1, 1];
 }
 
+function readNativeLevels() {
+    if (!bridgeChecked) {
+        bridgeChecked = true;
+        try {
+            if (typeof DiscordNative !== "undefined") {
+                const voice = DiscordNative.nativeModules.requireModule("discord_voice") as unknown as Partial<ParticipantBridge>;
+                if (typeof voice.getParticipantStereoLevels === "function") participantBridge = voice as ParticipantBridge;
+            }
+        } catch (error) {
+            logger.error("Cannot access participant PCM bridge", error);
+        }
+    }
+    if (!participantBridge) return;
+    const snapshot = participantBridge.getParticipantStereoLevels();
+    const me = UserStore.getCurrentUser()?.id;
+    for (const [userId, meter] of meters) {
+        if (meter.tap || userId === me) continue;
+        meter.nativeAvailable = snapshot.installed && snapshot.connection > 0;
+        meter.native = undefined;
+    }
+    if (!snapshot.installed || !snapshot.connection) return;
+    for (const level of snapshot.levels) {
+        const meter = meters.get(level.userId);
+        if (!meter || meter.tap || level.userId === me || level.ageMs < 0 || level.ageMs > 150
+            || (level.channels !== 1 && level.channels !== 2)
+            || ![level.rmsLeft, level.rmsRight, level.peakLeft, level.peakRight].every(value => Number.isFinite(value) && value >= 0 && value <= 1)) continue;
+        meter.native = level;
+        meter.mono = level.channels === 1;
+    }
+}
+
 function normalize(amplitude: number, floorDb: number) {
     const db = 20 * Math.log10(Math.max(amplitude, 1e-5));
     return Math.max(0, Math.min(1, (db - floorDb) / -floorDb));
@@ -448,6 +497,8 @@ function tick() {
             void pollStats(connection);
         }
 
+        if (!web) readNativeLevels();
+
         const { floorDb } = settings.store;
         for (const [userId, meter] of meters) {
             if (meter.tap) {
@@ -457,6 +508,10 @@ function tick() {
 
                 smooth(meter, 0, left, now);
                 smooth(meter, 1, right, now);
+            } else if (meter.nativeAvailable) {
+                const value = meter.native;
+                smooth(meter, 0, { rms: normalize(value?.rmsLeft ?? 0, floorDb), peak: normalize(value?.peakLeft ?? 0, floorDb) }, now);
+                smooth(meter, 1, { rms: normalize(value?.rmsRight ?? 0, floorDb), peak: normalize(value?.peakRight ?? 0, floorDb) }, now);
             } else {
                 const value = isHeard(userId) ? normalize(meter.amplitude, floorDb) : 0;
                 const [panL, panR] = getPan(userId);
@@ -525,11 +580,13 @@ const VoiceMeter = ErrorBoundary.wrap(({ userId, height = BAR_HEIGHT, width = BA
     const { display, peak } = meter;
     const { showPeak } = settings.store;
     const gap = Math.max(2, Math.round(width / 2));
-    const measured = meter.tap != null && !meter.mono;
+    const measured = (meter.tap != null || meter.nativeAvailable === true) && !meter.mono;
     const title = meter.ownsInput
         ? "Your selected input before Discord encoding. Left | Right"
-        : measured
-            ? "Participant audio channels. Left | Right"
+        : meter.nativeAvailable
+            ? "Participant decoded audio channels before your local pan. Left | Right"
+            : measured
+                ? "Participant audio channels. Left | Right"
             : "Left | Right after your local pan. Discord Desktop reports one level per participant, so both bars carry it.";
 
     return (
@@ -604,5 +661,7 @@ export default definePlugin({
         dropAll();
         connection = null;
         statsInFlight = false;
+        participantBridge = undefined;
+        bridgeChecked = false;
     }
 });
