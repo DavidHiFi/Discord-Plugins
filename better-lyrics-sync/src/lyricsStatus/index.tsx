@@ -43,6 +43,11 @@ const settings = definePluginSettings({
             { label: "Spotify", value: "spotify" },
         ],
     },
+    dopamineBridgePort: {
+        type: OptionType.NUMBER,
+        description: "Loopback bridge port for the Dopamine RPC patch (must match DOPAMINE_DISCORD_PORT).",
+        default: 35499,
+    },
     customMessageOnStop: {
         type: OptionType.BOOLEAN,
         description: "Set a custom message as your status when music stops or you disable the plugin",
@@ -83,7 +88,14 @@ let currentTrackId = "";
 let currentTrackName = "";
 let currentArtist = "";
 const DOPAMINE_APP_ID = "826521040275636325";
-const DOPAMINE_BRIDGE_URL = "http://127.0.0.1:35499";
+const DOPAMINE_DEFAULT_BRIDGE_PORT = 35499;
+const STATUS_MIN_INTERVAL_MS = 1500;
+const LYRICS_RETRY_DELAY_MS = 15000;
+
+function getDopamineBridgeUrl(): string {
+    const port = Number(settings.store.dopamineBridgePort) || DOPAMINE_DEFAULT_BRIDGE_PORT;
+    return `http://127.0.0.1:${port}`;
+}
 
 interface DopamineBridgeState {
     title: string;
@@ -133,15 +145,27 @@ function onCustomDelayChange({ trackKey, delay }: { trackKey: string; delay: num
 interface SyncedLine { time: number; text: string; }
 
 const lyricsCache = new Map<string, SyncedLine[] | null>();
+// A lookup can fail for transient reasons (offline, LrcLib hiccup). Remember
+// when, so the track is retried later instead of being remembered forever as
+// "this song has no lyrics".
+const lyricsFailedAt = new Map<string, number>();
+
+const LRC_TIMESTAMP = /\[(\d+):(\d+(?:\.\d+)?)\]/g;
 
 function parseLrc(lrc: string): SyncedLine[] {
     const lines: SyncedLine[] = [];
     for (const raw of lrc.split("\n")) {
-        const m = raw.match(/^\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
-        if (!m) continue;
-        const time = (parseInt(m[1]) * 60 + parseFloat(m[2])) * 1000;
-        const text = m[3].trim();
-        if (text) lines.push({ time, text });
+        // A single line may carry several timestamps (repeated choruses), e.g.
+        // [00:12.00][01:20.00]Same lyric. Only the first was read before, which
+        // left the remaining timestamps embedded in the lyric text.
+        const stamps = [...raw.matchAll(LRC_TIMESTAMP)];
+        if (!stamps.length) continue;
+        const last = stamps[stamps.length - 1];
+        const text = raw.slice((last.index ?? 0) + last[0].length).trim();
+        if (!text) continue;
+        for (const stamp of stamps) {
+            lines.push({ time: (parseInt(stamp[1]) * 60 + parseFloat(stamp[2])) * 1000, text });
+        }
     }
     return lines.sort((a, b) => a.time - b.time);
 }
@@ -152,8 +176,22 @@ function cleanTrackName(name: string): string {
         .trim();
 }
 
+// Mirrors the normalisation the Dopamine artwork helper uses. Players and
+// LrcLib disagree about "Eminem", "Eminem feat. X" and "Eminem, X" for the
+// same track; comparing the raw strings made the search fallback miss exactly
+// the tracks it exists for.
+function cleanArtistName(name: string): string {
+    return name
+        .replace(/\b(?:feat\.?|ft\.?)\b.*$/i, "")
+        .split(/[;,]/)[0]
+        .trim()
+        .toLowerCase();
+}
+
 async function fetchLyrics(track: string, artist: string, id: string, signal?: AbortSignal): Promise<SyncedLine[] | null> {
     if (lyricsCache.has(id)) return lyricsCache.get(id) ?? null;
+    const failedAt = lyricsFailedAt.get(id);
+    if (failedAt !== undefined && Date.now() - failedAt < LYRICS_RETRY_DELAY_MS) return null;
     const cleanedTrack = cleanTrackName(track);
     try {
         const query = new URLSearchParams({ track_name: cleanedTrack, artist_name: artist });
@@ -164,21 +202,25 @@ async function fetchLyrics(track: string, artist: string, id: string, signal?: A
             if (search.ok) {
                 const results = await search.json() as { trackName: string; artistName: string; syncedLyrics?: string; }[];
                 const normalizedTitle = cleanedTrack.toLowerCase();
-                const normalizedArtist = artist.toLowerCase();
+                const normalizedArtist = cleanArtistName(artist);
                 data = results.find(result =>
                     cleanTrackName(result.trackName).toLowerCase() === normalizedTitle &&
-                    result.artistName.toLowerCase() === normalizedArtist &&
+                    cleanArtistName(result.artistName) === normalizedArtist &&
                     !!result.syncedLyrics,
                 ) ?? null;
             }
         }
         const lines = data?.syncedLyrics ? parseLrc(data.syncedLyrics) : null;
-        if (res.ok || res.status === 404) lyricsCache.set(id, lines);
+        if (res.ok || res.status === 404) {
+            lyricsFailedAt.delete(id);
+            lyricsCache.set(id, lines);
+        }
         return lines;
     } catch (e) {
         if (signal?.aborted) return null;
-        logger.warn("LrcLib fetch failed:", e);
-        lyricsCache.set(id, null);
+        // Never cache a network failure as "this track has no lyrics".
+        logger.warn("LrcLib fetch failed (will retry):", e);
+        lyricsFailedAt.set(id, Date.now());
         return null;
     }
 }
@@ -200,6 +242,8 @@ let lastSentLine: string | null = null;
 let savedOriginalStatus: any = null;
 let statusWriteInFlight = false;
 let lastStatusWriteAt = 0;
+let pendingStatusText: string | null = null;
+let statusFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 function saveOriginalStatus() {
     if (savedOriginalStatus === null && CustomStatusSetting) {
@@ -253,11 +297,7 @@ async function writeCustomStatus(text: string, createdAtMs?: string): Promise<bo
     }
 }
 
-async function setStatus(text: string) {
-    if (text === lastSentLine || statusWriteInFlight) return;
-    const now = Date.now();
-    if (now - lastStatusWriteAt < 1500) return;
-
+async function writeStatusAndTrack(text: string) {
     statusWriteInFlight = true;
     saveOriginalStatus();
     const ok = await writeCustomStatus(text);
@@ -268,6 +308,41 @@ async function setStatus(text: string) {
     } else {
         lastSentLine = null;
     }
+    // A newer line may have arrived while this write was in flight; releasing
+    // the queue here keeps the flush self-driving instead of waiting for tick().
+    if (pendingStatusText !== null) scheduleStatusFlush(STATUS_MIN_INTERVAL_MS);
+}
+
+function scheduleStatusFlush(delayMs: number) {
+    if (statusFlushTimer !== null) return;
+    statusFlushTimer = setTimeout(() => {
+        statusFlushTimer = null;
+        void flushPendingStatus();
+    }, Math.max(delayMs, 0));
+}
+
+async function flushPendingStatus() {
+    // An in-flight write releases the queue itself when it completes.
+    if (statusWriteInFlight) return;
+    if (pendingStatusText === null) return;
+    const wait = STATUS_MIN_INTERVAL_MS - (Date.now() - lastStatusWriteAt);
+    if (wait > 0) {
+        scheduleStatusFlush(wait);
+        return;
+    }
+    const text = pendingStatusText;
+    pendingStatusText = null;
+    if (text === lastSentLine) return;
+    await writeStatusAndTrack(text);
+}
+
+// Rate-limited, newest-wins. A line that arrives inside the rate-limit window
+// is held as pending and written when the window opens, instead of being
+// dropped (which skipped lyric lines on fast songs).
+function setStatus(text: string) {
+    if (text === lastSentLine && pendingStatusText === null) return;
+    pendingStatusText = text;
+    void flushPendingStatus();
 }
 
 async function customStatus() {
@@ -297,17 +372,46 @@ let currentLines: SyncedLine[] | null = null;
 let lyricGeneration = 0;
 let lyricsAbortController: AbortController | null = null;
 
+function buildStatusText(line: string): string {
+    // Single pass. Substituting {lyrics} first would let a lyric line that
+    // happens to contain "{song}" / "{artist}" replace itself on a later pass.
+    return settings.store.format.replace(/\{(lyrics|song|artist)\}/g, (_, token: string) => {
+        if (token === "lyrics") return line;
+        if (token === "song") return currentTrackName;
+        return currentArtist;
+    });
+}
+
+function requestLyrics() {
+    if (!currentTrackId || currentLines || lyricsAbortController) return;
+    // Already known to have no synced lyrics; nothing to retry.
+    if (lyricsCache.has(currentTrackId) && !lyricsCache.get(currentTrackId)) return;
+    const requestedTrackId = currentTrackId;
+    const generation = ++lyricGeneration;
+    const abortController = new AbortController();
+    lyricsAbortController = abortController;
+    fetchLyrics(currentTrackName, currentArtist, requestedTrackId, abortController.signal)
+        .then(lines => {
+            if (!settings.store.active || generation !== lyricGeneration || currentTrackId !== requestedTrackId) return;
+            currentLines = lines;
+        })
+        .finally(() => {
+            if (lyricsAbortController === abortController) lyricsAbortController = null;
+        });
+}
+
 function tick() {
     if (!settings.store.active) return;
     updateActivePlayback();
-    if (!isPlaying || !currentLines) return;
+    if (!isPlaying) return;
+    if (!currentLines) {
+        // Retries a lookup that failed transiently while the track keeps playing.
+        requestLyrics();
+        return;
+    }
     const line = getCurrentLine(currentLines, getPosition() + getCurrentDelay());
     if (!line) return;
-    const text = settings.store.format
-        .replace("{lyrics}", line)
-        .replace("{song}", currentTrackName)
-        .replace("{artist}", currentArtist);
-    void setStatus(text);
+    setStatus(buildStatusText(line));
 }
 
 // Dopamine's own RPC (patched by dopamine-rpc-patch) is the single presence
@@ -358,7 +462,7 @@ async function refreshDopamineBridge() {
     if (bridgeRefreshing) return;
     bridgeRefreshing = true;
     try {
-        const response = await fetch(`${DOPAMINE_BRIDGE_URL}/current`, { signal: AbortSignal.timeout(1500) });
+        const response = await fetch(`${getDopamineBridgeUrl()}/current`, { signal: AbortSignal.timeout(1500) });
         if (!response.ok) throw new Error(`Dopamine bridge returned ${response.status}`);
         const data = await response.json() as Partial<DopamineBridgeState>;
         bridgeState = data.title && data.artists ? data as DopamineBridgeState : null;
@@ -400,18 +504,9 @@ function updatePlayback(newId: string, name: string, artist: string, playing: bo
         if (lastSentLine !== null || statusLooksLikeLyric()) handleStopStatus();
         currentLines = null;
         lyricsAbortController?.abort();
-        const generation = ++lyricGeneration;
-        if (currentTrackId) {
-            const abortController = new AbortController();
-            lyricsAbortController = abortController;
-            fetchLyrics(currentTrackName, currentArtist, currentTrackId, abortController.signal)
-                .then(lines => {
-                    if (settings.store.active && generation === lyricGeneration && currentTrackId === newId) currentLines = lines;
-                })
-                .finally(() => {
-                    if (lyricsAbortController === abortController) lyricsAbortController = null;
-                });
-        }
+        lyricsAbortController = null;
+        lyricGeneration++;
+        requestLyrics();
     }
 
     if (!isPlaying && (wasPlaying || trackChanged)) handleStopStatus();
@@ -534,7 +629,10 @@ export default definePlugin({
 
     start() {
         try {
-            if (settings.store.source === "tidal") settings.store.source = "auto";
+            // No "tidal" -> "auto" migration here: the legacy value
+            // (PlaybackSource.Tidal) was the literal string "tidal", which is
+            // still a valid explicit choice, so rewriting it silently threw
+            // away a deliberate TIDAL selection on every start.
             loadCustomSongDelays();
             void refreshDopamineBridge();
             bridgeIntervalId = setInterval(refreshDopamineBridge, 1000);
@@ -561,9 +659,15 @@ export default definePlugin({
         FluxDispatcher.unsubscribe("SPOTIFY_LYRICS_CUSTOM_DELAY_CHANGE", onCustomDelayChange as any);
         if (intervalId !== null) { clearInterval(intervalId); intervalId = null; }
         if (bridgeIntervalId !== null) { clearInterval(bridgeIntervalId); bridgeIntervalId = null; }
-        if (!isPlaying) handleStopStatus();
+        if (statusFlushTimer !== null) { clearTimeout(statusFlushTimer); statusFlushTimer = null; }
+        pendingStatusText = null;
+        // Disabling the plugin mid-playback used to leave the last lyric line
+        // stuck as the custom status, because this only ran when nothing was
+        // playing. The documented stop behaviour now always applies.
+        handleStopStatus();
         currentLines = null;
         lyricsCache.clear();
+        lyricsFailedAt.clear();
         lastSentLine = null;
         isPlaying = false;
         currentTrackId = "";

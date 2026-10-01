@@ -5,9 +5,22 @@ const http = require("node:http");
 const path = require("node:path");
 
 const lookupCache = new Map();
+const LOOKUP_CACHE_MAX = 500;
 const port = Number(process.env.DOPAMINE_DISCORD_PORT || 35499);
 let albumStatement;
 let current = null;
+
+// Discord RPC accepts either an uploaded asset key or a direct image URL for
+// the large image, so a resolved artwork URL can be sent as-is.
+function applyArtwork(args, url) {
+    if (!args || typeof args !== "object") return false;
+    try {
+        args.largeImageKey = url;
+        return true;
+    } catch {
+        return false; // frozen or sealed args object
+    }
+}
 
 function normalize(value) {
     return String(value || "").normalize("NFKD").toLowerCase()
@@ -79,6 +92,10 @@ function lookupArtwork(title, artists) {
     const key = `${normalize(title)}|${normalize(artists)}`;
     if (!key || key === "|") return Promise.resolve(null);
     if (!lookupCache.has(key)) {
+        // Unbounded growth leaked a promise per track for the whole session.
+        if (lookupCache.size >= LOOKUP_CACHE_MAX) {
+            lookupCache.delete(lookupCache.keys().next().value);
+        }
         lookupCache.set(key, findArtwork(title, artists).catch(() => null));
     }
     return lookupCache.get(key);
@@ -93,23 +110,35 @@ let resender = null;
 function setCurrent(args, resend) {
     const key = `${args.title}|${args.artists}`;
     const playing = !!args.shouldSendTimestamps;
-    const startTime = playing ? args.startTime || 0 : 0;
-    const sameTrack = current && current.key === key && current.playing === playing;
+    // The cover is resolved once per track, so it has to survive a pause and
+    // resume inside that track instead of being cleared by the new state.
+    const sameTrack = current && current.key === key;
+    const knownArtwork = sameTrack ? current.artworkUrl : null;
     current = {
         key,
         title: args.title,
         artists: args.artists,
         playing,
-        startTime,
-        artworkUrl: sameTrack ? current.artworkUrl : null,
+        startTime: playing && !args.startTime ? 0 : (playing ? args.startTime || 0 : 0),
+        artworkUrl: knownArtwork,
     };
     if (resend && typeof resend === "function") resender = resend;
+
+    // Dopamine has already published this update with its stock icon. When the
+    // cover for this track is already known, put it back on the activity now;
+    // this is what keeps the cover visible through a pause.
+    if (knownArtwork && !playing && resender && applyArtwork(args, knownArtwork)) {
+        try { resender(args); } catch { /* Dopamine reconnects on its own schedule */ }
+    }
+
     lookupArtwork(args.title, args.artists).then(url => {
         if (!current || current.key !== key) return;
         if (url === (current.artworkUrl || null)) return;
         current.artworkUrl = url || null;
-        current.startTime = playing && !args.startTime ? 0 : current.startTime;
-        if (resender && playing) {
+        // The README promises the cover as the activity's large image, but the
+        // resolved url was only stored and served over the bridge; it never
+        // reached Discord, so the activity kept the stock icon.
+        if (resender && url && applyArtwork(args, url)) {
             try { resender(args); } catch { /* Dopamine reconnects on its own schedule */ }
         }
     });
@@ -136,7 +165,11 @@ const server = http.createServer((request, response) => {
     }
     response.writeHead(404); response.end();
 });
-server.on("error", () => {});
+server.on("error", error => {
+    // Swallowing this silently left a dead bridge with no explanation anywhere
+    // (a port already in use was the usual cause).
+    console.warn(`[dopamine-discord-artwork] bridge unavailable on 127.0.0.1:${port}: ${error?.message ?? error}`);
+});
 server.listen(port, "127.0.0.1");
 server.unref();
 
