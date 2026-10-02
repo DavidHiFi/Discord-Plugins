@@ -45,6 +45,7 @@ function setup(initial = {}) {
         UserStore: { getCurrentUser: () => ({ id: "1" }), getUser: user => ({ username: user, bot: user === "4" }) },
         VoiceStateStore: { getVoiceStatesForChannel: () => Object.fromEntries([...members].map(user => [user, {}])) },
         MediaEngineStore: { getMediaEngine: () => ({ connections: [conn] }), getLocalVolume: user => volumes.get(user) ?? 100, isLocalMute: user => muted.has(user) },
+        lodash: { debounce: fn => { const f = (...args) => fn(...args); f.flush = () => {}; f.cancel = () => {}; return f; } },
         showToast() {}, Toasts: { Type: { MESSAGE: 1 } }
     };
     vm.createContext(sandbox);
