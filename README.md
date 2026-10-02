@@ -46,6 +46,8 @@ Vencord and Equicord compatibility depends on the plugin's imports and client AP
 
 ## Current validation
 
+On 2026-10-03, PanelLayout's footer ping repair passed eleven regression checks, targeted lint, Desktop and Equibop builds. Six live samples matched native voice latency at 76 ms and 66 ms. The shared test command now includes the ping checks.
+
 Sources were synchronized from the maintained client checkout on 2026-09-30. MicSpamGuard passes 49 offline behavior checks. VoiceVUMeters passes 33 offline PCM, pan, identity and peak checks plus an actual two-participant native decoder test. StereoGuard passes 9 hold/recovery checks alongside the shared attribution and cleanup checks. Targeted lint and isolated desktop and Equibop builds passed.
 
 Previous combined builds of all three plugins started without matching errors. The latest guard recovery build was installed and loaded through one authorized restart on 2026-09-30. All three audio plugins logged a clean start, and the saved guard settings stayed unchanged. A live blast/recovery scenario has not been exercised for this build. The maintainer confirmed that their own meter separates hard-left and hard-right input. The 2026-10-01 VoiceVUMeters companion bridge measures each remote participant's decoded left/right PCM on its audited desktop voice build. Two independently encoded synthetic participants passed hard-left/right separation through the actual native decoder, and the bridge loaded in Discord. A live friend test was not performed. Without the bridge, Desktop retains the scalar/local-pan fallback. StereoGuard does not mute anyone based on a shared output-device mix.

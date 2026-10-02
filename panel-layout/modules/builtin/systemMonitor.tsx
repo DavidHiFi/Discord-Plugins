@@ -139,7 +139,7 @@ export function SystemMonitorSettingsModal({ modalProps, onClose }: { modalProps
 
                     <Flex justifyContent="space-between" alignItems="center">
                         <div>
-                            <BaseText size="sm" style={{ color: "var(--header-primary)" }}>Gateway Ping</BaseText>
+                            <BaseText size="sm" style={{ color: "var(--header-primary)" }}>Connection Ping</BaseText>
                             <BaseText size="xs" color="text-muted">Display voice latency during calls and gateway latency otherwise</BaseText>
                         </div>
                         <FormSwitch

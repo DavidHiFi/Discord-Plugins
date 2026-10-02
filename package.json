@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "node tests/mic-spam-guard.cjs && node tests/stereo-guard.cjs"
+    "test": "node tests/mic-spam-guard.cjs && node tests/stereo-guard.cjs && node tests/panel-layout-ping.cjs"
   },
   "devDependencies": {
     "esbuild": "0.25.5"
