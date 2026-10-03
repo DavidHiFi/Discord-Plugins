@@ -20,6 +20,7 @@ import type { ReactNode } from "react";
 
 import { advertiseBadge, badgeFps, badgeResolution, normalizeBadgeConfig } from "./badge";
 import { installMicrophoneInterceptor, syncLiveMicrophoneEffects } from "./microphone";
+import { badgeSize, choiceAt, nearestChoice, showChoiceLabel, sliderChoices } from "./slider";
 
 export type StreamCodec = "auto" | "av1" | "vp9" | "h264";
 type StreamQualityPreset = "efficient" | "balanced" | "maxDetail" | "extreme" | "adaptiveMax";
@@ -1267,24 +1268,25 @@ function NumberEditor({
     max,
     markers,
     onChange,
-    fixed = true,
     markerFormatter
 }: NumberEditorProps) {
+    const choices = sliderChoices(markers, min, max);
+    const format = (position: number) => markerFormatter?.(choiceAt(position, choices)) ?? String(choiceAt(position, choices));
     return (
         <div className={cl("control")}>
             <div className={cl("label")}>
                 {label}: <span className={cl("label-value")}>{value}</span>
             </div>
             <Slider
-                key={fixed ? `${label}-${value}-${min}-${max}` : undefined}
-                minValue={min}
-                maxValue={max}
-                markers={markers}
-                initialValue={value}
-                stickToMarkers={fixed}
-                onValueChange={next => onChange(clamp(Math.round(next), min, max))}
-                onMarkerRender={next => markerFormatter?.(next) ?? String(Math.round(next))}
-                onValueRender={next => String(Math.round(next))}
+                minValue={0}
+                maxValue={choices.length - 1}
+                markers={choices.map((_, index) => index)}
+                initialValue={nearestChoice(value, choices)}
+                keyboardStep={1}
+                stickToMarkers={true}
+                onValueChange={next => onChange(choiceAt(next, choices))}
+                onMarkerRender={next => <span className="vc-stream-enhancer-slider-marker">{showChoiceLabel(next, choices.length) ? format(next) : ""}</span>}
+                onValueRender={format}
             />
         </div>
     );
@@ -1477,8 +1479,7 @@ export function StreamEnhancerControlPanel() {
             <SettingsSection title="Spoofed stream badge">
                 <FormSwitch value={normalized.spoofBadgeEnabled} onChange={value => set("spoofBadgeEnabled", value)} title="Show spoofed resolution and FPS" />
                 <div>Changes your screen-share badge for you and viewers. Actual capture quality, bitrate, and camera settings stay the same. Start a new screen share after changing these values to update viewers.</div>
-                <NumberEditor label="Badge width" value={normalized.spoofBadgeWidth} min={1} max={16384} markers={[1280, 1920, 2560, 3840, 7680, 16384]} onChange={next => set("spoofBadgeWidth", next)} />
-                <NumberEditor label="Badge height (resolution)" value={normalized.spoofBadgeHeight} min={1} max={16384} markers={[720, 1080, 1440, 2160, 4320, 8640, 16384]} onChange={next => set("spoofBadgeHeight", next)} />
+                <NumberEditor label="Badge resolution" value={normalized.spoofBadgeHeight} min={144} max={8640} markers={[144, 360, 480, 720, 1080, 1440, 2160, 4320, 8640]} markerFormatter={next => `${next}p`} onChange={next => { streamEnhancerSettings.store.config = normalizeConfig({ ...normalized, ...badgeSize(next) }); }} />
                 <NumberEditor label="Badge FPS" value={normalized.spoofBadgeFps} min={1} max={1000} markers={[30, 60, 120, 144, 240, 360, 1000]} onChange={next => set("spoofBadgeFps", next)} />
             </SettingsSection>
 

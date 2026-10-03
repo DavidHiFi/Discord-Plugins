@@ -108,7 +108,7 @@ export default definePlugin({
     name: "CustomStreamQuality",
     description: "Set your stream's resolution, frame rate, bitrate and codec, and choose what the stream badge shows viewers.",
     tags: ["Voice", "Utility"],
-    authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
+    authors: [{ name: "x2b", id: 996137713432530976n }, { name: "DavidHiFi", id: 1553713171938938891n }],
     settings,
     patches,
 

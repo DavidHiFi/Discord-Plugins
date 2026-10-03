@@ -1,8 +1,10 @@
-# Custom Stream Quality for TestCord
+# Custom Stream Quality for TestCord, legacy
+
+Custom Stream Quality is legacy, as designated by the TestCord lead developer. The StreamEnhancer fork is the replacement for combined stream controls and badge spoofing, including an on/off toggle and selectable advertised resolution and FPS.
 
 A TestCord plugin that sets your screen share's resolution, frame rate, bitrate, codec, keyframe interval and HDR capture. It can also show viewers a different resolution and frame rate on the stream badge, for example 8K 360 FPS while you actually stream 1080p 60.
 
-This is an independent MIT rewrite of TestCord's Custom Stream Quality plugin. It keeps the same plugin name and setting keys, so existing settings carry over.
+This is an independent MIT rewrite of TestCord's Custom Stream Quality plugin. It keeps the same plugin name and setting keys, so existing settings carry over. The original plugin was written by x2b, who remains credited as an author alongside DavidHiFi.
 
 ## What changed from the original
 

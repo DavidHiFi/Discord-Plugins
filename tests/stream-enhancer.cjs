@@ -69,3 +69,15 @@ if (process.env.STREAM_ENHANCER_MODULES) {
     }
 }
 console.log("StreamEnhancer badge isolation, validation, native self/remote camera and patch checks passed.");
+const { sliderChoices, nearestChoice, choiceAt, showChoiceLabel, badgeSize } = load("slider.ts");
+const fpsChoices = sliderChoices([30, 60, 120, 144, 240, 360, 1000], 1, 1000);
+assert.equal(nearestChoice(360.59, fpsChoices), 5);
+assert.equal(choiceAt(5.49, fpsChoices), 360);
+assert.equal(choiceAt(5.51, fpsChoices), 1000);
+assert.equal(choiceAt(-5, fpsChoices), 30);
+assert.equal(choiceAt(99, fpsChoices), 1000);
+assert.equal(badgeSize(1080).spoofBadgeWidth, 1920);
+assert.equal(badgeSize(4320).spoofBadgeWidth, 7680);
+assert.equal(badgeSize(8640).spoofBadgeWidth, 15360);
+assert.ok(Array.from({length: 30}, (_, i) => i).filter(i => showChoiceLabel(i, 30)).length <= 5);
+console.log("StreamEnhancer preset snapping and paired badge resolution checks passed.");
