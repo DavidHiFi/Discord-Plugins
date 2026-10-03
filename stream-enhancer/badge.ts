@@ -39,8 +39,8 @@ export function badgeFps(fps: number, config: BadgeConfig): number {
     return config.spoofBadgeEnabled ? config.spoofBadgeFps : fps;
 }
 
-export function badgeResolution<T extends { width: number; height: number; type: number; }>(resolution: T, config: BadgeConfig): T {
+export function badgeResolution<T extends { width: number; height: number; type: string; }>(resolution: T, config: BadgeConfig): T {
     return config.spoofBadgeEnabled
-        ? { ...resolution, width: config.spoofBadgeWidth, height: config.spoofBadgeHeight, type: 0 }
+        ? { ...resolution, width: config.spoofBadgeWidth, height: config.spoofBadgeHeight, type: "fixed" }
         : resolution;
 }

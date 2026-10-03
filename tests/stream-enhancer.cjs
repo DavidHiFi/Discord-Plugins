@@ -28,10 +28,10 @@ assert.equal(advertiseBadge({ context: "stream" }, streams, normalizeBadgeConfig
 assert.equal(advertiseBadge({ context: "stream" }, null, config), null);
 assert.equal(badgeFps(60, config), 360);
 assert.equal(badgeFps(60, normalizeBadgeConfig({})), 60);
-const local = Object.freeze({ width: 1920, height: 1080, type: 0 });
+const local = Object.freeze({ width: 1920, height: 1080, type: "fixed" });
 assert.equal(badgeResolution(local, normalizeBadgeConfig({})), local);
 assert.equal(badgeResolution(local, config).height, out[0].maxResolution.height);
-assert.equal(badgeResolution(local, config).type, 0);
+assert.equal(badgeResolution(local, config).type, "fixed");
 const invalid = normalizeBadgeConfig({ spoofBadgeWidth: NaN, spoofBadgeHeight: Infinity, spoofBadgeFps: -5 });
 assert.equal(invalid.spoofBadgeWidth, 7680);
 assert.equal(invalid.spoofBadgeHeight, 4320);
@@ -40,23 +40,50 @@ assert.equal(normalizeBadgeConfig({ spoofBadgeFps: 2000 }).spoofBadgeFps, 1000);
 const state = fs.readFileSync(path.join(root, "state.ts"), "utf8");
 const cameraCode = state.slice(state.indexOf("const CameraVideo ="), state.indexOf("// useStateFromStores compares results"));
 const native = {};
-const sandbox = { module: { exports: {} }, findComponentByCodeLazy: query => { assert.equal(query, 'location:"VideoStream"'); return native; }, React: { createElement: (component, props) => ({ component, props }) } };
+const sandbox = {
+    module: { exports: {} },
+    findComponentByCodeLazy: query => {
+        assert.equal(query, 'location:"VideoStream"');
+        return native;
+    },
+    Logger: class {
+        error() {}
+    },
+    React: { createElement: (component, props) => ({ component, props }) }
+};
 vm.runInNewContext(esbuild.transformSync(cameraCode, { loader: "ts", format: "cjs" }).code, sandbox);
 const render = sandbox.module.exports.renderZoomableCameraVideo;
 for (const mirror of [true, false]) {
     const props = { streamId: "camera-stream", videoComponent: {}, mirror, videoSpinnerContext: mirror ? "SELF_VIDEO" : "REMOTE_VIDEO", fit: "contain", paused: false };
-    const result = render(props, 1n);
+    // the captured native component takes priority over the global lookup
+    const result = render(native, props, 1n);
     assert.equal(result.component, native);
     for (const [key, value] of Object.entries(props)) assert.equal(result.props[key], value);
     assert.equal(result.props.key, "1");
 }
-assert.equal(render({}, null).props.key, undefined);
+// without a captured component the global lookup is the fallback
+const fallback = render(undefined, { streamId: "camera-stream" }, 2n);
+assert.equal(fallback.component, native);
+assert.equal(fallback.props.key, "2");
+assert.equal(render(undefined, {}, null).props.key, undefined);
+// compile gate: every plugin source must parse (TS/TSX)
+for (const name of fs.readdirSync(root)) {
+    if (name.endsWith(".ts") || name.endsWith(".tsx")) {
+        const loader = name.endsWith(".tsx") ? "tsx" : "ts";
+        esbuild.transformSync(fs.readFileSync(path.join(root, name), "utf8"), { loader, format: "cjs" });
+    }
+}
+for (const name of fs.readdirSync(path.join(root, "components"))) {
+    if (name.endsWith(".tsx")) {
+        esbuild.transformSync(fs.readFileSync(path.join(root, "components", name), "utf8"), { loader: "tsx", format: "cjs" });
+    }
+}
 const { streamEnhancerPatches } = load("patches.ts");
 if (process.env.STREAM_ENHANCER_MODULES) {
     const { modules } = JSON.parse(fs.readFileSync(process.env.STREAM_ENHANCER_MODULES, "utf8"));
-    for (const find of ['REMOTE_VIDEO,paused:', '"useMaxQuality"', "this._sentVideo&&"]) {
+    for (const find of ["REMOTE_VIDEO,paused:", 'location:"VideoStream"', '"useMaxQuality"', "this._sentVideo&&", "Stream Tile State"]) {
         const patch = streamEnhancerPatches.find(p => p.find === find);
-        const term = find.replaceAll('"', '');
+        const term = find.replaceAll('"', "");
         const found = modules[term];
         assert.equal(found.length, 1, `one live module for ${find}`);
         let code = found[0].code;

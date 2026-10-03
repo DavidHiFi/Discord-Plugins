@@ -460,8 +460,8 @@ export const streamEnhancerPatches: Array<Omit<Patch, "plugin">> = [
     {
         find: "zoom-controls",
         replacement: {
-            match: /paused:(\i)\},"zoom-controls"/,
-            replace: 'paused:$1,showPreview:null!=arguments[0].streamId},"zoom-controls"'
+            match: /streamId:(\i),paused:(\i)\},"zoom-controls"/,
+            replace: 'streamId:$1,paused:$2,showPreview:null!=$1},"zoom-controls"'
         }
     },
     {
@@ -500,12 +500,12 @@ export const streamEnhancerPatches: Array<Omit<Patch, "plugin">> = [
                 replace: "$&,vcRenderedWidth=$self.useRenderedWidthFromProps({participant:$1},$2),vcState=$self.useRenderedStreamVideoState($1.id,$3)"
             },
             {
-                match: /width:\i,fit:(\i),onVideoResize:(\i),paused:(\i),popoutType:(\i)/,
-                replace: "width:vcRenderedWidth,fit:$1,onVideoResize:$2,paused:$3,popoutType:$4"
+                match: /width:(\i),fit:(\i),onVideoResize:(\i),paused:(\i),popoutType:(\i)/,
+                replace: "width:typeof vcRenderedWidth!==\"undefined\"?vcRenderedWidth:$1,fit:$2,onVideoResize:$3,paused:$4,popoutType:$5"
             },
             {
-                match: /(\(0,\i\.jsx\)\(\i\.A,\{participant:\i,selected:\i,popoutType:\i,width:\i,fit:\i,onVideoResize:\i,paused:\i)\}/,
-                replace: "$1,fit:vcState.fit,className:vcState.className,style:vcState.style,wrapperClassName:vcState.wrapperClassName,wrapperStyle:vcState.wrapperStyle}"
+                match: /(\(0,\i\.jsx\)\(\i\.\i,\{participant:\i,selected:\i,popoutType:\i,width:\i,fit:\i,onVideoResize:\i,paused:\i)\}/,
+                replace: "$1,fit:typeof vcState!==\"undefined\"?vcState.fit:void 0,className:typeof vcState!==\"undefined\"?vcState.className:void 0,style:typeof vcState!==\"undefined\"?vcState.style:void 0,wrapperClassName:typeof vcState!==\"undefined\"?vcState.wrapperClassName:void 0,wrapperStyle:typeof vcState!==\"undefined\"?vcState.wrapperStyle:void 0}"
             }
         ]
     },
@@ -518,28 +518,34 @@ export const streamEnhancerPatches: Array<Omit<Patch, "plugin">> = [
             },
             {
                 match: /className:r\(\)\(\i\.iE,\i,\{[^}]*\}\)(?=,onMouseDown:\i,onMouseMove:\i,onMouseUp:\i,onMouseLeave:\i,onWheel:\i,onClick:\i)/,
-                replace: "$&,style:vcWrapperStyle"
+                replace: "$&,style:typeof vcWrapperStyle!==\"undefined\"?vcWrapperStyle:void 0"
             }
         ]
     },
     {
         find: "REMOTE_VIDEO,paused:",
+        // Discord's call tile renders cameras through its own VideoStream component. That
+        // component is captured straight from the call site and handed to
+        // renderZoomableCameraVideo, so camera tiles never depend on a global webpack
+        // lookup. Each replacement is written to stand on its own: if one stops matching
+        // on a future build, the remaining ones must keep the tile rendering instead of
+        // throwing on a missing vcState binding.
         replacement: [
             {
-                match: /function \i\(\i\)\{let\{participant:(\i),channel:\i,inCall:\i,width:\i,selected:\i,popoutType:\i,fit:(\i),onVideoResize:\i,blocked:\i,ignored:\i,noVideoRender:\i=!1.{0,120}\}=\i,/,
-                replace: "$&vcState=$self.useRenderedStreamVideoState($1?.id,$2),"
+                match: /function (\i)\((\i)\)\{let\{participant:(\i),channel:\i,inCall:\i,width:\i,selected:\i,popoutType:\i,fit:(\i),onVideoResize:\i,blocked:\i,ignored:\i,noVideoRender:\i=!1.{0,120}\}=\i,/,
+                replace: "$&vcState=$self.useRenderedStreamVideoState($3?.id,$4),"
             },
             {
-                match: /\(0,\i\.jsx\)\(\i\.A,\{onResize:(\i),wrapperClassName:(\i!==\i\.\i\.CALL_TILE\?\i\.\i:void 0),/,
-                replace: "$self.renderZoomableCameraVideo({onResize:$1,wrapperClassName:$self.getRenderedMediaWrapperClassName($2,vcState.wrapperClassName),"
+                match: /\(0,(\i)\.jsx\)\((\i\.\i),\{onResize:(\i),wrapperClassName:(\i!==\i\.\i\.CALL_TILE\?\i\.\i:void 0),/,
+                replace: "$self.renderZoomableCameraVideo($2,{onResize:$3,wrapperClassName:$self.getRenderedMediaWrapperClassName($4,typeof vcState!==\"undefined\"?vcState.wrapperClassName:void 0),"
             },
             {
                 match: /className:(\i\.\i),mirror:/,
-                replace: "className:vcState.className,mirror:"
+                replace: "className:$self.mergeRenderedStreamVideoClassName($1,typeof vcState!==\"undefined\"?vcState.className:void 0),mirror:"
             },
             {
-                match: /fit:\i,videoSpinnerContext:/,
-                replace: "fit:vcState.fit,style:vcState.style,wrapperStyle:vcState.wrapperStyle,streamKey:t.id,videoSpinnerContext:"
+                match: /fit:(\i),videoSpinnerContext:/,
+                replace: "fit:typeof vcState!==\"undefined\"?vcState.fit:$1,style:typeof vcState!==\"undefined\"?vcState.style:void 0,wrapperStyle:typeof vcState!==\"undefined\"?vcState.wrapperStyle:void 0,videoSpinnerContext:"
             }
         ]
     },
@@ -556,11 +562,11 @@ export const streamEnhancerPatches: Array<Omit<Patch, "plugin">> = [
             },
             {
                 match: /wrapperClassName:((?:\i\(\)\()?\i!==\i\.\i\.CALL_TILE\?\i\.\i:void 0,\i)\),className:/,
-                replace: "wrapperClassName:$1,vcState.wrapperClassName),className:"
+                replace: "wrapperClassName:$1,typeof vcState!==\"undefined\"?vcState.wrapperClassName:void 0),className:"
             },
             {
                 match: /className:(\i\.\i),streamId:(\i),videoComponent:(\i),fit:(\i),paused:/,
-                replace: "className:vcState.className,streamId:$2,videoComponent:$3,fit:vcState.fit,style:vcState.style,paused:"
+                replace: "className:$self.mergeRenderedStreamVideoClassName($1,typeof vcState!==\"undefined\"?vcState.className:void 0),streamId:$2,videoComponent:$3,fit:typeof vcState!==\"undefined\"?vcState.fit:$4,style:typeof vcState!==\"undefined\"?vcState.style:void 0,paused:"
             }
         ]
     },
@@ -597,11 +603,11 @@ export const streamEnhancerPatches: Array<Omit<Patch, "plugin">> = [
         replacement: [
             {
                 match: /\[(\i),(\i)\]=(\i)\.useState\(!0\)/,
-                replace: "[$1,$2]=$3.useState(!0),vcState=$self.useRenderedStreamVideoState(arguments[0].streamKey,arguments[0].fit)"
+                replace: "[$1,$2]=$3.useState(!0),vcState=$self.useRenderedStreamVideoState(arguments[0].streamKey??arguments[0].userId,arguments[0].fit)"
             },
             {
-                match: /\(0,(\i)\.t\)\((\i),"video",\i\)/,
-                replace: "(0,$1.t)($2,\"video\",vcState.fit)"
+                match: /\(0,(\i)\.t\)\((\i),"video",(\i)\)/,
+                replace: "(0,$1.t)($2,\"video\",typeof vcState!==\"undefined\"?vcState.fit:$3)"
             }
         ]
     },
@@ -614,7 +620,7 @@ export const streamEnhancerPatches: Array<Omit<Patch, "plugin">> = [
             },
             {
                 match: /let (\i)=120\*Math\.min\((\i),32\/9\);return\{"--custom-zoom-minimap-width":`\$\{\1\}px`,"--custom-zoom-minimap-height":"120px"\}\},\[\2\]\)/,
-                replace: "let $1=(ce?80:120)*Math.min($2,32/9),minimapHeight=ce?\"80px\":\"120px\";return{\"--custom-zoom-minimap-width\":`${$1}px`,\"--custom-zoom-minimap-height\":minimapHeight}},[$2,ce])"
+                replace: "let $1=((typeof ce!==\"undefined\"&&ce)?80:120)*Math.min($2,32/9),minimapHeight=(typeof ce!==\"undefined\"&&ce)?\"80px\":\"120px\";return{\"--custom-zoom-minimap-width\":`${$1}px`,\"--custom-zoom-minimap-height\":minimapHeight}},[$2,typeof ce!==\"undefined\"?ce:void 0])"
             }
         ]
     },

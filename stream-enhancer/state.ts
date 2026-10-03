@@ -8,6 +8,7 @@ import * as DataStore from "@api/DataStore";
 import { disableStyle, enableStyle } from "@api/Styles";
 import { classNameFactory } from "@utils/css";
 import { proxyLazy } from "@utils/lazy";
+import { Logger } from "@utils/Logger";
 import { classes, sleep } from "@utils/misc";
 import { findComponentByCodeLazy } from "@webpack";
 import { ChannelStore, Flux, FluxDispatcher, React, SelectedChannelStore, UserStore, useStateFromStores } from "@webpack/common";
@@ -15,7 +16,7 @@ import type { CSSProperties } from "react";
 
 import hiddenChannelListStyle from "./channelListHidden.css?managed";
 import { applicationStreamingStore, channelRtcActions, channelRtcStore, popoutActions, popoutWindowStore, streamUiConstants, watchStream } from "./runtime";
-import type { StoredAutoWatchPreferences, StreamDescriptor, StreamFitMode, StreamParticipant, StreamRtcConnectionStatePayload, StreamRtcConnectionVideoPayload, ZoomableVideoProps } from "./types";
+import type { StoredAutoWatchPreferences, StreamDescriptor, StreamFitMode, StreamParticipant, StreamRtcConnectionStatePayload, StreamRtcConnectionVideoPayload, ZoomableVideoComponent, ZoomableVideoProps } from "./types";
 
 const cl = classNameFactory("vc-stream-enhancer-");
 type RenderedVideoStyle = CSSProperties & {
@@ -1274,8 +1275,34 @@ export const getRenderedFrameStyle = (streamKey: string | null | undefined) => {
 
 const CameraVideo = findComponentByCodeLazy<ZoomableVideoProps>('location:"VideoStream"');
 
-export const renderZoomableCameraVideo = (props: ZoomableVideoProps, key: string | number | bigint | null | undefined) =>
-    React.createElement(CameraVideo, { ...props, key: key == null ? undefined : String(key) });
+const isReactComponentLike = (value: unknown): value is ZoomableVideoComponent =>
+    typeof value === "function"
+    || (value != null && typeof value === "object" && "$$typeof" in (value as Record<string, unknown>));
+
+/**
+ * Renders Discord's own camera video component with our fit/zoom props threaded in.
+ *
+ * `nativeComponent` is the component captured directly at the patched call site, so the
+ * normal path never depends on a global webpack lookup: even if the `location:"VideoStream"`
+ * code string changes between Discord builds, the tile keeps rendering exactly what Discord
+ * would have rendered. The lazy lookup is only a fallback for unexpected call shapes, and
+ * any failure degrades to `null` (Discord's own avatar/no-video state) instead of throwing
+ * inside React, which would blank out the whole call tile.
+ */
+export const renderZoomableCameraVideo = (
+    nativeComponent: unknown,
+    props: ZoomableVideoProps,
+    key: string | number | bigint | null | undefined
+) => {
+    const component = isReactComponentLike(nativeComponent) ? nativeComponent : CameraVideo;
+
+    try {
+        return React.createElement(component, { ...props, key: key == null ? undefined : String(key) });
+    } catch (error) {
+        new Logger("StreamEnhancer").error("Failed to render the native camera video component", error);
+        return null;
+    }
+};
 
 // useStateFromStores compares results with reference equality by default, which would
 // re-render on every store change because the mapper builds a new object each call.
