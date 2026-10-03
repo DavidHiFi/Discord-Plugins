@@ -718,10 +718,11 @@ function setup(initial = {}) {
 (0, import_node_test.default)("Balancing actions show prominent notices without a notice every tick", () => {
   const t = setup();
   t.store.notify = true;
+  t.store.notificationMode = "verbose";
   t.speech(-6, 5e3);
   (0, import_strict.default)(t.notifications.some((n) => n.body.includes("Turned down")));
   (0, import_strict.default)(t.notifications.length <= 2);
-  (0, import_strict.default)(t.toasts.every((n) => n.options.duration === 8e3 && n.options.position === 0));
+  import_strict.default.equal(t.toasts.length, 0);
   t.speech(-Infinity, 12e3);
   (0, import_strict.default)(t.notifications.some((n) => n.body.includes("Restored")));
   import_strict.default.equal(v(t), 100);
@@ -744,6 +745,37 @@ function setup(initial = {}) {
   t.speech(-Infinity, 12e3);
   import_strict.default.equal(t.notifications.length, 0);
   import_strict.default.equal(t.toasts.length, 0);
+});
+(0, import_node_test.default)("Standard mode shows essential events once and skips balancing notices", () => {
+  const t = setup();
+  t.store.notify = true;
+  import_strict.default.equal(t.store.notificationMode, "standard");
+  t.speech(-6, 5e3);
+  t.speech(-Infinity, 12e3);
+  import_strict.default.equal(t.notifications.length, 0);
+  import_strict.default.equal(t.toasts.length, 0);
+  t.store.autoMute = true;
+  t.store.autoUnmute = 3;
+  t.store.dynamicUserVolume = false;
+  t.speech(0, 1e3);
+  t.speech(-Infinity, 6e3);
+  import_strict.default.equal(t.notifications.length, 2);
+  import_strict.default.equal(t.toasts.length, 0);
+  import_strict.default.equal(t.notifications[1].body, "Restored 2 to 100%.");
+});
+(0, import_node_test.default)("Verbose adds context without adding a second notification channel", () => {
+  const t = setup();
+  t.store.notify = true;
+  t.store.notificationMode = "verbose";
+  t.store.autoMute = true;
+  t.store.autoUnmute = 3;
+  t.store.dynamicUserVolume = false;
+  t.speech(0, 1e3);
+  t.speech(-Infinity, 6e3);
+  import_strict.default.equal(t.notifications.length, 2);
+  import_strict.default.equal(t.toasts.length, 0);
+  (0, import_strict.default)(t.notifications[0].body.includes("Level 100%"));
+  (0, import_strict.default)(t.notifications[1].body.includes("After 3 seconds"));
 });
 (0, import_node_test.default)("StereoGuard retains volume ownership during MicSpamGuard recovery", () => {
   const t = setup();
