@@ -527,7 +527,7 @@ export const streamEnhancerPatches: Array<Omit<Patch, "plugin">> = [
         replacement: [
             {
                 match: /function \i\(\i\)\{let\{participant:(\i),channel:\i,inCall:\i,width:\i,selected:\i,popoutType:\i,fit:(\i),onVideoResize:\i,blocked:\i,ignored:\i,noVideoRender:\i=!1.{0,120}\}=\i,/,
-                replace: "$&vcState=$self.useRenderedStreamVideoState($1?.id,$2),"
+                replace: "$&vcStreamKey=$1?.id,vcState=$self.useRenderedStreamVideoState(vcStreamKey,$2),"
             },
             {
                 match: /\(0,\i\.jsx\)\(\i\.A,\{onResize:(\i),wrapperClassName:(\i!==\i\.\i\.CALL_TILE\?\i\.\i:void 0),/,
@@ -535,11 +535,12 @@ export const streamEnhancerPatches: Array<Omit<Patch, "plugin">> = [
             },
             {
                 match: /className:(\i\.\i),mirror:/,
-                replace: "className:vcState.className,mirror:"
+                // Keep Discord's layout class: VideoStream depends on it for the camera element's dimensions.
+                replace: "className:$self.mergeRenderedStreamVideoClassName($1,vcState.className),mirror:"
             },
             {
                 match: /fit:\i,videoSpinnerContext:/,
-                replace: "fit:vcState.fit,style:vcState.style,wrapperStyle:vcState.wrapperStyle,streamKey:t.id,videoSpinnerContext:"
+                replace: "fit:vcState.fit,style:vcState.style,wrapperStyle:vcState.wrapperStyle,streamKey:vcStreamKey,videoSpinnerContext:"
             }
         ]
     },
@@ -560,7 +561,8 @@ export const streamEnhancerPatches: Array<Omit<Patch, "plugin">> = [
             },
             {
                 match: /className:(\i\.\i),streamId:(\i),videoComponent:(\i),fit:(\i),paused:/,
-                replace: "className:vcState.className,streamId:$2,videoComponent:$3,fit:vcState.fit,style:vcState.style,paused:"
+                // Preserve the native video class while adding StreamEnhancer's fit class.
+                replace: "className:$self.mergeRenderedStreamVideoClassName($1,vcState.className),streamId:$2,videoComponent:$3,fit:vcState.fit,style:vcState.style,paused:"
             }
         ]
     },

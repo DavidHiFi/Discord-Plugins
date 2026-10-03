@@ -1515,7 +1515,7 @@ export function StreamEnhancerControlPanel() {
                     value={normalized.outgoingVideoFilterEnabled}
                     onChange={value => set("outgoingVideoFilterEnabled", value)}
                     title="Apply video filters to your outgoing stream"
-                    description="Re-encodes your capture through a canvas so the viewer Video Filters (brightness, contrast, saturation, hue, tint) are baked into what viewers actually receive, instead of only being graded on your own screen. Adds a small amount of CPU per frame."
+                    description="Bakes active brightness, contrast, saturation, hue, and tint filters into outgoing video. Unfiltered camera and screen-share tracks pass through unchanged; filtered tracks use a canvas and add some CPU cost. Turn this on before starting video if you want the filters sent to viewers."
                 />
             </SettingsSection>
         </div>

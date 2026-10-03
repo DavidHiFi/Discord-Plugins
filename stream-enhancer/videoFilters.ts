@@ -44,7 +44,23 @@ const evenDimension = (value: number | undefined, fallback: number) => {
     return size % 2 === 0 ? size : size + 1;
 };
 
-const isNeutralFilter = (filter: string | null) => filter == null || filter.trim() === "";
+const isNeutralFilter = (filter: string | null | undefined) =>
+    filter == null || filter.trim() === "" || filter.trim() === "none";
+
+// Do not put an unfiltered camera or screen share through a canvas. Apart from
+// wasting CPU, a blank canvas frame can make the local preview and remote video
+// appear gray on clients that do not support manual canvas frame requests.
+export const shouldWrapOutgoingVideoFilter = (filter: string | null | undefined) => !isNeutralFilter(filter);
+
+// captureStream(0) relies on CanvasCaptureMediaStreamTrack.requestFrame(), which
+// is missing in some Chromium/Electron builds. A positive rate keeps the canvas
+// track flowing there as well; follow the source rate when it is available.
+export const getCanvasCaptureFrameRate = (frameRate: unknown) => {
+    const numeric = typeof frameRate === "number" && Number.isFinite(frameRate) && frameRate > 0
+        ? frameRate
+        : 30;
+    return Math.min(120, Math.max(1, Math.round(numeric)));
+};
 
 type ManualFrameTrack = MediaStreamTrack & { requestFrame?: () => void };
 
@@ -70,7 +86,18 @@ const createFilteredVideoTrack = (source: MediaStreamTrack, getFilter: FilterPro
     getFilterHost().appendChild(video);
     void video.play().catch(() => { });
 
-    const canvasStream = canvas.captureStream(0);
+    let canvasStream: MediaStream;
+    try {
+        if (typeof canvas.captureStream !== "function") {
+            video.remove();
+            return null;
+        }
+        canvasStream = canvas.captureStream(getCanvasCaptureFrameRate(settings.frameRate));
+    } catch {
+        video.remove();
+        return null;
+    }
+
     const outputTrack = canvasStream.getVideoTracks()[0];
     if (outputTrack == null) {
         video.remove();
@@ -156,6 +183,8 @@ const createFilteredVideoTrack = (source: MediaStreamTrack, getFilter: FilterPro
 };
 
 const wrapStreamVideo = (stream: MediaStream, getFilter: FilterProvider): MediaStream => {
+    if (!shouldWrapOutgoingVideoFilter(getFilter())) return stream;
+
     const source = stream.getVideoTracks()[0];
     if (source == null || managedVideoStreams.has(stream)) return stream;
 
