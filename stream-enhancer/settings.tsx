@@ -15,10 +15,10 @@ import { classNameFactory } from "@utils/css";
 import { OptionType } from "@utils/types";
 import type { SelectOption } from "@vencord/discord-types";
 import { findByPropsLazy, findStoreLazy } from "@webpack";
-import { FluxDispatcher, Select, Slider, TextInput, Toasts, useEffect, UserStore,useState } from "@webpack/common";
+import { FluxDispatcher, Select, Slider, TextInput, Toasts, useEffect, UserStore, useState } from "@webpack/common";
 import type { ReactNode } from "react";
 
-import { advertiseBadge, badgeFps, badgeResolution, normalizeBadgeConfig } from "./badge";
+import { advertiseBadge, badgeFps, badgeFpsPresets, badgeResolution, badgeResolutionPresets, maxBadgeFps, maxBadgeHeight, normalizeBadgeConfig } from "./badge";
 import { installMicrophoneInterceptor, syncLiveMicrophoneEffects } from "./microphone";
 import { badgeSize, choiceAt, nearestChoice, showChoiceLabel, sliderChoices } from "./slider";
 
@@ -165,7 +165,6 @@ interface NumberEditorProps {
     max: number;
     markers: number[];
     onChange: (value: number) => void;
-    fixed?: boolean;
     markerFormatter?: (value: number) => string;
 }
 
@@ -1377,7 +1376,7 @@ export function StreamEnhancerControlPanel() {
                 <FormSwitch value={normalized.dynamicBitrateFloorEnabled} onChange={value => set("dynamicBitrateFloorEnabled", value)} title="Keep bitrate from dropping too low" />
                 <FormSwitch value={normalized.streamHdrExperimentEnabled} onChange={value => set("streamHdrExperimentEnabled", value)} title="Enable HDR Go Live experiment" description="Forces Discord's 2026-02 Go Live HDR experiment into its HDR-enabled treatment." />
                 <FormSwitch value={normalized.streamHdrCaptureMode} onChange={value => set("streamHdrCaptureMode", value)} title="Use HDR capture mode" description="Passes Discord's HDR capture mode through to the native capture pipeline." />
-                <NumberEditor label="Max stream FPS" value={normalized.streamMaxFps} min={minStreamFps} max={maxStreamFps} markers={streamFpsMarkers} onChange={next => set("streamMaxFps", next)} fixed={false} />
+                <NumberEditor label="Max stream FPS" value={normalized.streamMaxFps} min={minStreamFps} max={maxStreamFps} markers={streamFpsMarkers} onChange={next => set("streamMaxFps", next)} />
                 <div className={cl("label")}>Stream resolution</div>
                 <Select
                     options={resolutionOptions}
@@ -1479,8 +1478,8 @@ export function StreamEnhancerControlPanel() {
             <SettingsSection title="Spoofed stream badge">
                 <FormSwitch value={normalized.spoofBadgeEnabled} onChange={value => set("spoofBadgeEnabled", value)} title="Show spoofed resolution and FPS" />
                 <div>Changes your screen-share badge for you and viewers. Actual capture quality, bitrate, and camera settings stay the same. Start a new screen share after changing these values to update viewers.</div>
-                <NumberEditor label="Badge resolution" value={normalized.spoofBadgeHeight} min={144} max={8640} markers={[144, 360, 480, 720, 1080, 1440, 2160, 4320, 8640]} markerFormatter={next => `${next}p`} onChange={next => { streamEnhancerSettings.store.config = normalizeConfig({ ...normalized, ...badgeSize(next) }); }} />
-                <NumberEditor label="Badge FPS" value={normalized.spoofBadgeFps} min={1} max={1000} markers={[30, 60, 120, 144, 240, 360, 1000]} onChange={next => set("spoofBadgeFps", next)} />
+                <NumberEditor label="Badge resolution" value={normalized.spoofBadgeHeight} min={144} max={maxBadgeHeight} markers={badgeResolutionPresets} markerFormatter={next => `${next}p`} onChange={next => { streamEnhancerSettings.store.config = normalizeConfig({ ...normalized, ...badgeSize(next) }); }} />
+                <NumberEditor label="Badge FPS" value={normalized.spoofBadgeFps} min={1} max={maxBadgeFps} markers={badgeFpsPresets} onChange={next => set("spoofBadgeFps", next)} />
             </SettingsSection>
 
             <SettingsSection title="Preview Controls">
@@ -1524,6 +1523,11 @@ export function StreamEnhancerControlPanel() {
 }
 
 export const streamEnhancerSettings = definePluginSettings({
+    showPanelButton: {
+        type: OptionType.BOOLEAN,
+        description: "Show a StreamEnhancer settings button in the user panel.",
+        default: true
+    },
     config: {
         type: OptionType.CUSTOM,
         description: "Persistent StreamEnhancer tuning values.",

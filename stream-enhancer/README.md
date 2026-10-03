@@ -17,3 +17,5 @@ Authors: omaw (upstream StreamEnhancer) and DavidHiFi (this fork). License: GPL-
 Run `node tests/stream-enhancer.cjs` from the repository root after installing its development dependencies. The checks cover badge isolation from the real encoder config, clamping of invalid values, the native camera render for both self and remote, and each new patch against captured live module code. Set `STREAM_ENHANCER_MODULES` to a captured module JSON to also assert the patch matches. These checks run offline and do not establish live call behaviour.
 
 The resolution slider sets a 16:9 width and height together. Numeric controls snap to evenly spaced presets, display whole numbers, and show at most five marker labels to prevent overlap. Moving a slider no longer remounts it for each value change.
+
+The optional user-panel button opens StreamEnhancer settings and can be hidden with Show panel button. Badge presets extend to 34,560p, or 61,440 by 34,560, and 1,000,000 FPS. These are advertised metadata only; the encoder uses the real stream settings. Discord may clamp or reject extreme metadata values. Restart screen sharing after changing badge values to update viewers.

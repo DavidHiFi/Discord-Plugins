@@ -21,6 +21,6 @@ export function showChoiceLabel(index: number, count: number) {
 }
 
 export function badgeSize(height: number) {
-    height = Math.max(144, Math.min(8640, Math.round(height)));
+    height = Math.max(144, Math.min(34560, Math.round(height)));
     return { spoofBadgeHeight: height, spoofBadgeWidth: Math.round(height * 16 / 9) };
 }

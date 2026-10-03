@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import { plugins } from "@api/PluginManager";
+import { UserAreaButton, type UserAreaRenderProps } from "@api/UserArea";
+import { ScreenshareIcon } from "@components/Icons";
+import { openPluginModal } from "@components/settings";
 import { EquicordDevs, TestcordDevs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
@@ -30,6 +34,18 @@ import managedStyle from "./styles.css?managed";
 import type { StreamParticipant } from "./types";
 import { installOutgoingVideoFilterInterceptor, uninstallOutgoingVideoFilterInterceptor } from "./videoFilters";
 
+export function StreamEnhancerButton({ iconForeground, hideTooltips, nameplate }: UserAreaRenderProps) {
+    const { showPanelButton } = streamEnhancerSettings.use(["showPanelButton"]);
+    if (!showPanelButton) return null;
+    return <UserAreaButton
+        icon={<ScreenshareIcon className={iconForeground} />}
+        tooltipText={hideTooltips ? undefined : "Stream Enhancer"}
+        aria-label="Stream Enhancer"
+        plated={nameplate != null}
+        onClick={() => openPluginModal(plugins.StreamEnhancer)}
+    />;
+}
+
 const streamEnhancer = definePlugin({
     name: "StreamEnhancer",
     description: "Stream tuning, native camera previews, viewer controls, and optional spoofed stream badges. DavidHiFi fork.",
@@ -37,6 +53,7 @@ const streamEnhancer = definePlugin({
     requiresRestart: true,
     managedStyle,
     settings: streamEnhancerSettings,
+    userAreaButton: { icon: ScreenshareIcon, render: StreamEnhancerButton },
     contextMenus: {
         "stream-context": streamContextPatch,
         "user-context": userContextPatch
