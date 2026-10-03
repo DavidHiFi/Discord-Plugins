@@ -61,6 +61,7 @@ for (const mirror of [true, false]) {
     for (const [key, value] of Object.entries(props)) assert.equal(result.props[key], value);
     assert.equal(result.props.key, "1");
 }
+assert.equal(render({ streamId: "camera-stream" }, undefined).props.key, "camera-stream");
 assert.equal(render({}, null).props.key, undefined);
 
 // The Discord CSS module class controls the actual video element's dimensions.
@@ -125,6 +126,9 @@ assert.equal(videoFilters.shouldWrapOutgoingVideoFilter(undefined), false);
 assert.equal(videoFilters.shouldWrapOutgoingVideoFilter("  "), false);
 assert.equal(videoFilters.shouldWrapOutgoingVideoFilter("none"), false);
 assert.equal(videoFilters.shouldWrapOutgoingVideoFilter("contrast(118%)"), true);
+const untouchedVideoStream = { getVideoTracks: () => { throw new Error("an unfiltered stream should not be inspected or wrapped"); } };
+assert.equal(videoFilters.wrapStreamVideo(untouchedVideoStream, () => null), untouchedVideoStream);
+assert.equal(videoFilters.wrapStreamVideo(untouchedVideoStream, () => "none"), untouchedVideoStream);
 assert.equal(videoFilters.getCanvasCaptureFrameRate(undefined), 30);
 assert.equal(videoFilters.getCanvasCaptureFrameRate(59.8), 60);
 assert.equal(videoFilters.getCanvasCaptureFrameRate(0), 30);

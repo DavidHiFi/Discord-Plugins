@@ -1274,8 +1274,13 @@ export const getRenderedFrameStyle = (streamKey: string | null | undefined) => {
 
 const CameraVideo = findComponentByCodeLazy<ZoomableVideoProps>('location:"VideoStream"');
 
-export const renderZoomableCameraVideo = (props: ZoomableVideoProps, key: string | number | bigint | null | undefined) =>
-    React.createElement(CameraVideo, { ...props, key: key == null ? undefined : String(key) });
+export const renderZoomableCameraVideo = (
+    props: ZoomableVideoProps,
+    key?: string | number | bigint | null
+) => {
+    const elementKey = key ?? props.streamKey ?? props.streamId;
+    return React.createElement(CameraVideo, { ...props, key: elementKey == null ? undefined : String(elementKey) });
+};
 
 // useStateFromStores compares results with reference equality by default, which would
 // re-render on every store change because the mapper builds a new object each call.

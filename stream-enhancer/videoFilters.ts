@@ -182,7 +182,7 @@ const createFilteredVideoTrack = (source: MediaStreamTrack, getFilter: FilterPro
     return managed;
 };
 
-const wrapStreamVideo = (stream: MediaStream, getFilter: FilterProvider): MediaStream => {
+export const wrapStreamVideo = (stream: MediaStream, getFilter: FilterProvider): MediaStream => {
     if (!shouldWrapOutgoingVideoFilter(getFilter())) return stream;
 
     const source = stream.getVideoTracks()[0];
