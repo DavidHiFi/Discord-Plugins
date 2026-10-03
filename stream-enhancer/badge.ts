@@ -12,10 +12,10 @@ export interface BadgeConfig {
 }
 
 export const badgeResolutionPresets = [144, 360, 480, 720, 1080, 1440, 2160, 4320, 8640, 17280, 34560];
-export const badgeFpsPresets = [30, 60, 120, 144, 240, 360, 1000, 10000, 100000, 1000000];
+export const badgeFpsPresets = [30, 60, 120, 144, 240, 360, 1000, 10000];
 export const maxBadgeHeight = 34560;
 export const maxBadgeWidth = 61440;
-export const maxBadgeFps = 1000000;
+export const maxBadgeFps = 10000;
 
 export function normalizeBadgeConfig(source: Partial<BadgeConfig>): BadgeConfig {
     const bounded = (value: number | undefined, fallback: number, max: number) =>
