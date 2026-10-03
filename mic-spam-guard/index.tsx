@@ -11,7 +11,8 @@
  */
 
 import { DataStore } from "@api/index";
-import { showNotification } from "@api/Notifications";
+import NotificationComponent from "@api/Notifications/NotificationComponent";
+import { persistNotification } from "@api/Notifications/notificationLog";
 import { plugins } from "@api/PluginManager";
 import { definePluginSettings } from "@api/Settings";
 import { UserAreaButton, UserAreaRenderProps } from "@api/UserArea";
@@ -19,7 +20,7 @@ import { openPluginModal } from "@components/settings";
 import { Logger } from "@utils/Logger";
 import definePlugin, { makeRange, OptionType } from "@utils/types";
 import { findByCodeLazy, findByPropsLazy } from "@webpack";
-import { Button, lodash, MediaEngineStore, React, RelationshipStore, SelectedChannelStore, UserStore, VoiceStateStore } from "@webpack/common";
+import { Button, lodash, MediaEngineStore, React, ReactDOM, RelationshipStore, SelectedChannelStore, UserStore, VoiceStateStore } from "@webpack/common";
 
 import { VolumeHold } from "./protection";
 
@@ -38,6 +39,7 @@ const AUTO_CEILING = 200;
 const AUTO_GATE_DB = -48;
 const VOLUME_DEADBAND = 0.05;
 const PERSIST_DEBOUNCE_MS = 1000;
+const NOTICE_LIFETIME_MS = 3000;
 
 const MIC_GUARD_KEYS = ["enabled"] as const;
 
@@ -103,6 +105,7 @@ const settings = definePluginSettings({
         default: true,
         onChange() {
             if (!settings.store.enabled) {
+                clearNotices();
                 unmuteAll("silent");
                 restoreAll("silent");
             }
@@ -212,14 +215,16 @@ const settings = definePluginSettings({
     },
     notify: {
         type: OptionType.BOOLEAN,
-        description: "Show MicSpamGuard notification cards and keep them in notification history.",
-        default: true
+        description: "Show one live activity card and keep actions in notification history.",
+        default: true,
+        onChange(on: boolean) { if (!on) clearNotices(); }
     },
     notificationMode: {
         type: OptionType.SELECT,
         displayName: "Notification detail",
         description: "Standard shows mutes and restores. Verbose adds balancing changes and explains each action.",
         hidden: () => !settings.store.notify,
+        onChange() { clearNotices(); },
         options: [
             { label: "Standard", value: "standard", default: true },
             { label: "Verbose", value: "verbose" }
@@ -232,15 +237,74 @@ function displayName(userId: string) {
     return user?.globalName ?? user?.username ?? userId;
 }
 
-function notifyAction(message: string, options: { warning?: boolean; verboseOnly?: boolean; details?: string; } = {}) {
+interface GuardNoticeItem { key: string; body: string; warning: boolean; at: number; }
+let noticeItems: GuardNoticeItem[] = [];
+let noticeChannelId: string | null = null;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+const noticeSubscribers = new Set<() => void>();
+
+function publishNotices() {
+    for (const listener of noticeSubscribers) listener();
+}
+
+function clearNotices() {
+    if (noticeTimer !== undefined) clearTimeout(noticeTimer);
+    noticeTimer = undefined;
+    noticeChannelId = null;
+    noticeItems = [];
+    publishNotices();
+}
+
+function expireNotices() {
+    if (noticeChannelId !== SelectedChannelStore.getVoiceChannelId()) { clearNotices(); return; }
+    const now = Date.now();
+    noticeItems = noticeItems.filter(item => now - item.at < NOTICE_LIFETIME_MS);
+    publishNotices();
+    scheduleNoticeExpiry();
+}
+
+function scheduleNoticeExpiry() {
+    if (noticeTimer !== undefined) clearTimeout(noticeTimer);
+    noticeTimer = noticeItems.length
+        ? setTimeout(expireNotices, Math.max(1, noticeItems[0].at + NOTICE_LIFETIME_MS - Date.now()))
+        : undefined;
+}
+
+function subscribeNotices(listener: () => void) {
+    noticeSubscribers.add(listener);
+    return () => { noticeSubscribers.delete(listener); };
+}
+
+function noticeSnapshot() { return noticeItems; }
+
+function GuardNotice() {
+    const items = React.useSyncExternalStore(subscribeNotices, noticeSnapshot, noticeSnapshot);
+    if (!items.length) return null;
+    return ReactDOM.createPortal(
+        <NotificationComponent title="MicSpamGuard" body={items.map(item => item.body).join("\n")}
+            richBody={<div>{items.map(item => <p key={item.key} className="vc-notification-p">{item.body}</p>)}</div>}
+            color={items.some(item => item.warning) ? "#f9e2af" : "#a6e3a1"}
+            permanent onClose={clearNotices} />,
+        document.body
+    );
+}
+
+function notifyAction(message: string, options: { warning?: boolean; verboseOnly?: boolean; details?: string; userId?: string; } = {}) {
     if (!settings.store.notify) return;
     const verbose = settings.store.notificationMode === "verbose";
     if (options.verboseOnly && !verbose) return;
-    void showNotification({
-        title: "MicSpamGuard",
-        body: verbose && options.details ? `${message} ${options.details}` : message,
-        color: options.warning ? "#f9e2af" : "#a6e3a1"
-    });
+    const channelId = SelectedChannelStore.getVoiceChannelId();
+    if (!channelId || (options.userId && !currentVoiceMembers().includes(options.userId))) return;
+    if (noticeChannelId !== channelId) clearNotices();
+    noticeChannelId = channelId;
+    const body = verbose && options.details ? `${message} ${options.details}` : message;
+    const now = Date.now();
+    const key = options.userId ?? "guard";
+    noticeItems = [...noticeItems.filter(item => item.key !== key && now - item.at < NOTICE_LIFETIME_MS),
+        { key, body, warning: !!options.warning, at: now }].slice(-3);
+    publishNotices();
+    scheduleNoticeExpiry();
+    void persistNotification({ title: "MicSpamGuard", body, color: options.warning ? "#f9e2af" : "#a6e3a1" });
 }
 
 function formatDuration(seconds: number) {
@@ -403,6 +467,7 @@ function mute(userId: string, level: number) {
 
     notifyAction(`Muted ${displayName(userId)} for extreme loudness.`, {
         warning: true,
+        userId,
         details: `Level ${level}%. ${settings.store.autoUnmute > 0 ? "Volume will return to 100% after the quiet interval." : "Auto restore is off; restore manually."}`
     });
 }
@@ -421,12 +486,13 @@ function unmute(userId: string, mode: "manual" | "auto" | "silent") {
     if (mode === "silent" || !settings.store.notify) return;
 
     if (otherGuardHolds(userId)) {
-        notifyAction(`Released MicSpamGuard's hold on ${displayName(userId)}. StereoGuard still controls their volume.`, { warning: true });
+        notifyAction(`Released MicSpamGuard's hold on ${displayName(userId)}. StereoGuard still controls their volume.`, { warning: true, userId });
         return;
     }
     notifyAction(mode === "auto"
         ? `Restored ${displayName(userId)} to 100%.`
         : `Unmuted ${displayName(userId)}.`, {
+        userId,
         details: mode === "auto" ? `After ${formatDuration(settings.store.autoUnmute)} without loud audio.` : undefined
     });
 }
@@ -444,7 +510,7 @@ function restoreVolume(userId: string, mode: "manual" | "auto" | "silent") {
 
     if (mode === "silent" || !settings.store.notify) return;
 
-    notifyAction(`Restored ${displayName(userId)} to ${Math.round(amplitudeToVolume(entry.base))}%.`, { verboseOnly: mode === "auto", details: "Automatic balancing ended after quiet audio." });
+    notifyAction(`Restored ${displayName(userId)} to ${Math.round(amplitudeToVolume(entry.base))}%.`, { userId, verboseOnly: mode === "auto", details: "Automatic balancing ended after quiet audio." });
 }
 
 function restoreAll(mode: "manual" | "silent") {
@@ -498,7 +564,7 @@ function updateDynamics(now: number) {
             const direction = slider < baseline - 5 ? -1 : slider > baseline + 5 ? 1 : 0;
             if (direction && (entry.noticeAt === undefined || now - entry.noticeAt >= 10000)
                 && (entry.noticeDirection !== direction || Math.abs(slider - (entry.noticeVolume ?? baseline)) >= 20)) {
-                notifyAction(`${direction < 0 ? "Turned down" : "Raised"} ${displayName(userId)} to ${slider}%.`, { warning: direction < 0, verboseOnly: true, details: "Balancing their incoming voice level." });
+                notifyAction(`${direction < 0 ? "Turned down" : "Raised"} ${displayName(userId)} to ${slider}%.`, { userId, warning: direction < 0, verboseOnly: true, details: "Balancing their incoming voice level." });
                 entry.noticeAt = now;
                 entry.noticeDirection = direction;
                 entry.noticeVolume = slider;
@@ -582,6 +648,7 @@ function onStats(payload: VoiceStats) {
 function bindConnection(conn: VoiceConnection | null) {
     if (conn === boundConnection) return;
 
+    clearNotices();
     boundConnection?.emitter?.off?.("stats", onStats);
     unmuteAll("silent");
     restoreAll("silent");
@@ -601,6 +668,7 @@ function poll() {
 
         const now = Date.now();
         const members = new Set(currentVoiceMembers());
+        if (noticeChannelId && noticeChannelId !== SelectedChannelStore.getVoiceChannelId()) clearNotices();
         for (const userId of [...volumeHolds.keys()]) {
             if (!members.has(userId) || isIgnored(userId) || isLocalMuted(userId)) unmute(userId, "silent");
         }
@@ -765,6 +833,8 @@ function MicSpamGuardButton({ iconForeground, hideTooltips, nameplate }: UserAre
     const { enabled } = settings.use(MIC_GUARD_KEYS);
 
     return (
+        <>
+        <GuardNotice />
         <UserAreaButton
             icon={<MicSpamGuardIcon className={iconForeground} />}
             tooltipText={hideTooltips ? void 0 : "Mic Spam Guard"}
@@ -780,6 +850,7 @@ function MicSpamGuardButton({ iconForeground, hideTooltips, nameplate }: UserAre
                 notifyAction(`MicSpamGuard ${settings.store.enabled ? "enabled" : "disabled"}.`);
             }}
         />
+        </>
     );
 }
 
@@ -839,6 +910,7 @@ export default definePlugin({
     },
 
     stop() {
+        clearNotices();
         if (intervalId !== undefined) {
             clearInterval(intervalId);
             intervalId = undefined;

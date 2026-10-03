@@ -45,6 +45,7 @@ function setup(initial = {}) {
   const muted = /* @__PURE__ */ new Set();
   const friends = /* @__PURE__ */ new Set();
   const members = /* @__PURE__ */ new Set(["1", "2", "3", "4"]);
+  const channel = { id: "channel" };
   const emitter = { on() {
   }, off() {
   } };
@@ -107,9 +108,13 @@ function setup(initial = {}) {
     }),
     findByCodeLazy: (...filters) => filters.includes("Math.log10") ? toSlider : toRaw,
     Button: {},
-    React: {},
+    React: { useSyncExternalStore: (_subscribe, read2) => read2(), createElement: (type, props, ...children) => ({ type, props, children }) },
+    ReactDOM: { createPortal: (child, target) => ({ child, target }) },
+    NotificationComponent() {
+    },
+    document: { body: {} },
     RelationshipStore: { isFriend: (user) => friends.has(user) },
-    SelectedChannelStore: { getVoiceChannelId: () => "channel" },
+    SelectedChannelStore: { getVoiceChannelId: () => channel.id },
     UserStore: { getCurrentUser: () => ({ id: "1" }), getUser: (user) => ({ username: user, bot: user === "4" }) },
     VoiceStateStore: {
       getVoiceStatesForChannel: () => Object.fromEntries([...members].map((user) => [user, {}]))
@@ -122,9 +127,12 @@ function setup(initial = {}) {
     showToast(message, _type, options) {
       toasts.push({ message, options });
     },
-    showNotification(data) {
+    persistNotification(data) {
       notifications.push(data);
       return Promise.resolve();
+    },
+    showNotification() {
+      throw Error("MicSpamGuard must not use the shared notification queue");
     },
     Toasts: { Type: { MESSAGE: 1 }, Position: { TOP: 0 } }
   };
@@ -187,6 +195,7 @@ function setup(initial = {}) {
     speech,
     store,
     storeWrites,
+    channel,
     notifications,
     toasts,
     volumes,
@@ -776,6 +785,64 @@ function setup(initial = {}) {
   import_strict.default.equal(t.toasts.length, 0);
   (0, import_strict.default)(t.notifications[0].body.includes("Level 100%"));
   (0, import_strict.default)(t.notifications[1].body.includes("After 3 seconds"));
+});
+(0, import_node_test.default)("A burst replaces current activity instead of creating a popup backlog", () => {
+  const t = setup();
+  t.store.notify = true;
+  t.store.notificationMode = "verbose";
+  for (let i = 0; i < 100; i++) t.run(`notifyAction("Action ${i}", {userId:"2"})`);
+  import_strict.default.equal(t.run("noticeItems.length"), 1);
+  import_strict.default.equal(t.run("noticeItems[0].body"), "Action 99");
+  t.advance(3100);
+  import_strict.default.equal(t.run("noticeItems.length"), 0);
+});
+(0, import_node_test.default)("The activity card bounds rows and expires old participants independently", () => {
+  const t = setup();
+  t.store.notify = true;
+  for (const id of ["1", "2", "3", "4"]) t.run(`notifyAction("User ${id}", {userId:"${id}"})`);
+  import_strict.default.equal(t.run("noticeItems.length"), 3);
+  t.advance(2e3);
+  t.run('notifyAction("Updated", {userId:"2"})');
+  t.advance(1100);
+  import_strict.default.equal(t.run("noticeItems.length"), 1);
+  import_strict.default.equal(t.run("noticeItems[0].body"), "Updated");
+});
+(0, import_node_test.default)("Leaving the call clears activity and rejects later stale actions", () => {
+  const t = setup();
+  t.run("poll()");
+  t.store.notify = true;
+  t.run('notifyAction("Before leaving", {userId:"2"})');
+  t.channel.id = null;
+  t.run("poll()");
+  import_strict.default.equal(t.run("noticeItems.length"), 0);
+  t.run('notifyAction("Stale", {userId:"2"})');
+  import_strict.default.equal(t.run("noticeItems.length"), 0);
+  t.advance(1e4);
+  import_strict.default.equal(t.run("noticeItems.length"), 0);
+});
+(0, import_node_test.default)("Mode changes, disabling notices and plugin shutdown clear current activity", () => {
+  const t = setup();
+  t.store.notify = true;
+  t.run('notifyAction("Mode change")');
+  t.plugin.settings.defs.notificationMode.onChange();
+  import_strict.default.equal(t.run("noticeItems.length"), 0);
+  t.run('notifyAction("Disable")');
+  t.plugin.settings.defs.notify.onChange(false);
+  import_strict.default.equal(t.run("noticeItems.length"), 0);
+  t.run('notifyAction("Stop")');
+  t.plugin.stop();
+  import_strict.default.equal(t.run("noticeItems.length"), 0);
+});
+(0, import_node_test.default)("Activity renders as one live card and dismissing it clears all rows", () => {
+  const t = setup();
+  t.store.notify = true;
+  t.run('notifyAction("First", {userId:"2"}); notifyAction("Second", {userId:"3"})');
+  const view = t.run("GuardNotice()");
+  import_strict.default.equal(view.child.props.title, "MicSpamGuard");
+  import_strict.default.equal(view.child.props.permanent, true);
+  import_strict.default.equal(view.child.props.body, "First\nSecond");
+  view.child.props.onClose();
+  import_strict.default.equal(t.run("GuardNotice()"), null);
 });
 (0, import_node_test.default)("StereoGuard retains volume ownership during MicSpamGuard recovery", () => {
   const t = setup();

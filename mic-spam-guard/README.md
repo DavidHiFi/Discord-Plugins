@@ -10,7 +10,9 @@ Manual volume changes during a hold remain yours. Manual restore and disabling t
 
 ## Notices
 
-MicSpamGuard uses one notification card per event, with no duplicate top toast. Cards remain in client notification history. Standard mode, the default, shows concise mute, protection recovery and manual restore notices. Verbose adds automatic volume reductions, quiet-voice boosts, balancing restores and explanations. Balancing notices require a meaningful slider change and repeat at most every ten seconds per participant. The notifications toggle turns all notices off. Client-wide notification settings control native versus in-app presentation.
+MicSpamGuard shows one live activity card instead of adding cards to the client's notification queue. It keeps at most three recent participants, replaces each person's previous action with their latest action, and expires each row after three seconds even while hovered. Leaving or switching calls, disabling notifications, changing detail mode and stopping the plugin clear the card immediately. Historical actions remain in the notification log without being replayed as popups.
+
+Standard mode shows concise mute, protection recovery and manual restore actions. Verbose also shows balancing changes and explanations, with the same per-participant rate limiting. Client notification position settings still control the card's position. The activity card uses the existing notification component and does not emit native desktop notifications.
 
 ## Validation
 
