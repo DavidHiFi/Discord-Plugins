@@ -750,7 +750,7 @@ function MicSpamGuardButton({ iconForeground, hideTooltips, nameplate }: UserAre
 export default definePlugin({
     name: "MicSpamGuard",
     description: "Smoothly balances voice volumes and protects the call from sustained extreme loudness.",
-    authors: [{ name: "Kurtzon", id: 1253545207488839784n }, { name: "DavidHiFi", id: 1553713171938938891n }],
+    authors: [{ name: "Kurtzon Audio", id: 1552878708732469258n }, { name: "DavidHiFi", id: 1553713171938938891n }],
     tags: ["Voice", "Utility"],
     settings,
     settingsAboutComponent: GuardPanel,

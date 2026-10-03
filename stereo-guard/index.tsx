@@ -778,7 +778,7 @@ function StereoGuardButton({ iconForeground, hideTooltips, nameplate }: UserArea
 export default definePlugin({
     name: "StereoGuard",
     description: "Locally mutes anyone whose audio is obnoxiously in stereo: hard panned, panning around, or wide stereo music.",
-    authors: [{ name: "Kurtzon", id: 1253545207488839784n }, { name: "DavidHiFi", id: 1553713171938938891n }],
+    authors: [{ name: "Kurtzon Audio", id: 1552878708732469258n }, { name: "DavidHiFi", id: 1553713171938938891n }],
     tags: ["Voice", "Utility"],
     enabledByDefault: true,
     settings,

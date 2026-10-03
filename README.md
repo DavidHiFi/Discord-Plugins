@@ -14,6 +14,7 @@ Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/
 
 | Plugin | What it does | TestCord destination |
 | --- | --- | --- |
+| [ClickToUnmute](click-to-unmute/) | Click a locally muted member's mute icon to unmute them. | `src/userplugins/ClickToUnmute` |
 | [StaffTag](stafftag/) | Staff badges in chat, member lists and profiles. | `src/userplugins/staffTag` |
 | [FakeVoice](fakevoice/) | Local fake voice states, a native loopback bridge and Stream Deck controls. | `src/userplugins/fakevoice` |
 | [LyricsStatus](better-lyrics-sync/) | Current lyric lines in custom status, with the Dopamine RPC companion. | `src/testcordplugins/lyricsStatus` |

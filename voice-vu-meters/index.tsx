@@ -613,7 +613,7 @@ function TileMeter({ userId }: { userId?: string; }) {
 export default definePlugin({
     name: "VoiceVUMeters",
     description: "Draws left and right voice meters with a divider next to everyone in your voice channel and on call tiles.",
-    authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
+    authors: [{ name: "DavidHiFi", id: 1553713171938938891n }, { name: "Kurtzon Audio", id: 1552878708732469258n }],
     tags: ["Voice", "Utility"],
     enabledByDefault: true,
     settings,

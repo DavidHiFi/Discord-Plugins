@@ -89,6 +89,14 @@
       "installTarget": "src/testcordplugins/StreamEnhancer",
       "license": "GPL-3.0-or-later",
       "description": "DavidHiFi fork with native camera previews and independent spoofed screen-share badges."
+    },
+    {
+      "folder": "click-to-unmute",
+      "name": "ClickToUnmute",
+      "source": "click-to-unmute",
+      "installTarget": "src/userplugins/ClickToUnmute",
+      "license": "MIT",
+      "description": "Click a locally muted voice member's mute icon to unmute them."
     }
   ]
 }
