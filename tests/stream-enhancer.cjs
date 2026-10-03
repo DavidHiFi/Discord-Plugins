@@ -36,7 +36,7 @@ const invalid = normalizeBadgeConfig({ spoofBadgeWidth: NaN, spoofBadgeHeight: I
 assert.equal(invalid.spoofBadgeWidth, 7680);
 assert.equal(invalid.spoofBadgeHeight, 4320);
 assert.equal(invalid.spoofBadgeFps, 1);
-assert.equal(normalizeBadgeConfig({ spoofBadgeFps: 2000000 }).spoofBadgeFps, 10000);
+assert.equal(normalizeBadgeConfig({ spoofBadgeFps: 2000000 }).spoofBadgeFps, 1000);
 const state = fs.readFileSync(path.join(root, "state.ts"), "utf8");
 const cameraCode = state.slice(state.indexOf("const CameraVideo ="), state.indexOf("// useStateFromStores compares results"));
 const native = {};
@@ -86,7 +86,7 @@ const huge = normalizeBadgeConfig({ spoofBadgeEnabled: true, ...badgeSize(34560)
 const hugeStreams = advertiseBadge({ context: "stream" }, streams, huge);
 assert.equal(hugeStreams[0].maxResolution.width, 61440);
 assert.equal(hugeStreams[0].maxResolution.height, 34560);
-assert.equal(hugeStreams[0].maxFrameRate, 10000);
+assert.equal(hugeStreams[0].maxFrameRate, 1000);
 assert.ok(hugeStreams[0].maxPixelCount <= 2147483647);
 assert.equal(hugeStreams[0].maxBitrate, video.maxBitrate);
 assert.equal(advertiseBadge({ context: "default" }, streams, huge), streams);
@@ -106,4 +106,4 @@ assert.equal(opened, plugin);
 assert.equal(renderButton({hideTooltips:true}).props.tooltipText, undefined);
 visible = false;
 assert.equal(renderButton({}), null);
-console.log("StreamEnhancer 10,000-FPS bounds, encoder isolation and optional panel button checks passed.");
+console.log("StreamEnhancer 1,000-FPS bounds, encoder isolation and optional panel button checks passed.");
