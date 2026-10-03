@@ -19,7 +19,6 @@ import { FluxDispatcher, Select, Slider, TextInput, Toasts, useEffect, UserStore
 import type { ReactNode } from "react";
 
 import { advertiseBadge, badgeFps, badgeResolution, normalizeBadgeConfig } from "./badge";
-
 import { installMicrophoneInterceptor, syncLiveMicrophoneEffects } from "./microphone";
 
 export type StreamCodec = "auto" | "av1" | "vp9" | "h264";
