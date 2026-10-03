@@ -17,6 +17,7 @@ Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/
 | [StaffTag](stafftag/) | Staff badges in chat, member lists and profiles. | `src/userplugins/staffTag` |
 | [FakeVoice](fakevoice/) | Local fake voice states, a native loopback bridge and Stream Deck controls. | `src/userplugins/fakevoice` |
 | [LyricsStatus](better-lyrics-sync/) | Current lyric lines in custom status, with the Dopamine RPC companion. | `src/testcordplugins/lyricsStatus` |
+| [StreamEnhancer](stream-enhancer/) | DavidHiFi fork with native camera previews and spoofed resolution/FPS badges. | `src/testcordplugins/StreamEnhancer` |
 | [Custom Stream Quality](custom-stream-quality/) | Encoder controls and independent advertised stream badges. | `src/testcordplugins/StreamQuality` |
 | [RoundedVcPfp](rounded-vc-pfp/) | Rounded full-resolution avatars on call tiles. | `src/userplugins/RoundedVcPfp` |
 | [MicSpamGuard](mic-spam-guard/) | Gentle voice balancing and sustained extreme-loudness protection. | `src/userplugins/MicSpamGuard` |
@@ -31,7 +32,7 @@ This collection contains custom implementations and forks with local changes. Th
 
 Use a TestCord source checkout. Choose the plugins you want and copy the contents of the source folders listed in `plugins.json` into their destination folders. Copy all source files, including CSS and native helpers. For example, copy `fakevoice/index.tsx` and `fakevoice/native.ts` into `src/userplugins/fakevoice/`. The optional Stream Deck companion lives in `fakevoice/streamdeck/`.
 
-For LyricsStatus, copy `better-lyrics-sync/src/lyricsStatus/`. For Custom Stream Quality, copy `custom-stream-quality/src/`. Those two and PanelLayout replace existing TestCord plugin folders, so back up the old source first. RoundedVCPFP is the maintained avatar fork in this collection. Disable the client's bundled FullVCPFP before enabling RoundedVCPFP.
+For LyricsStatus, copy `better-lyrics-sync/src/lyricsStatus/`. For Custom Stream Quality, copy `custom-stream-quality/src/`. Those two, PanelLayout and StreamEnhancer replace existing TestCord plugin folders, so back up the old source first. RoundedVCPFP is the maintained avatar fork in this collection. Disable the client's bundled FullVCPFP before enabling RoundedVCPFP.
 
 From the client checkout, build with its documented commands. For the current TestCord tree:
 

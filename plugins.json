@@ -81,6 +81,14 @@
       "installTarget": "src/testcordplugins/PanelLayout",
       "license": "GPL-3.0-or-later",
       "description": "The maintained TestCord panel layout, including the ping-freshness fix."
+    },
+    {
+      "folder": "stream-enhancer",
+      "name": "StreamEnhancer",
+      "source": "stream-enhancer",
+      "installTarget": "src/testcordplugins/StreamEnhancer",
+      "license": "GPL-3.0-or-later",
+      "description": "DavidHiFi fork with native camera previews and independent spoofed screen-share badges."
     }
   ]
 }
