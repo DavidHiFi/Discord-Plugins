@@ -20,7 +20,7 @@ Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/
 | [LyricsStatus](better-lyrics-sync/) | Current lyric lines in custom status, with the Dopamine RPC companion. | `src/testcordplugins/lyricsStatus` |
 | [StreamEnhancer](stream-enhancer/) | DavidHiFi fork with native camera previews and spoofed resolution/FPS badges. | `src/testcordplugins/StreamEnhancer` |
 | [Custom Stream Quality](custom-stream-quality/) | Encoder controls and independent advertised stream badges. | `src/testcordplugins/StreamQuality` |
-| [RoundedVcPfp](rounded-vc-pfp/) | Rounded full-resolution avatars on call tiles, with configurable radius (0-36 px) and zoom (50-100 %). | `src/userplugins/RoundedVcPfp` |
+| [RoundedVcPfp](rounded-vc-pfp/) | Rounded full-resolution avatars on call tiles, with independent picture and tile radius (0-52 each), zoom (25-100 %) and an optional bare-picture background switch. | `src/userplugins/RoundedVcPfp` |
 | [MicSpamGuard](mic-spam-guard/) | Gentle voice balancing and sustained extreme-loudness protection. | `src/userplugins/MicSpamGuard` |
 | [StereoGuard](stereo-guard/) | Stereo detection for known per-participant streams; no guessed output-mix mutes. | `src/userplugins/StereoGuard` |
 | [VoiceVUMeters](voice-vu-meters/) | Per-participant left/right meters, with an audited native bridge for desktop remote stereo. | `src/userplugins/VoiceVUMeters` |

@@ -15,21 +15,40 @@ import { ChannelRTCStore, ChannelStore, UserStore, VoiceStateStore } from "@webp
 import style from "./style.css?managed";
 
 const settings = definePluginSettings({
+    avatarRadius: {
+        type: OptionType.SLIDER,
+        description: "Profile picture corner rounding. 0 is a flat square like FullVCPFP; 50 and higher is a full circle.",
+        markers: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52],
+        default: 5,
+        stickToMarkers: false
+    },
     cornerRadius: {
         type: OptionType.SLIDER,
         description: "Tile corner rounding in pixels. 0 is flat like FullVCPFP; 12 is a clean, visible round.",
-        markers: [0, 4, 8, 12, 16, 20, 24, 28, 32, 36],
+        markers: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52],
         default: 12,
         stickToMarkers: false
     },
     zoom: {
         type: OptionType.SLIDER,
         description: "Avatar zoom in percent. 100 is the current size; lower values zoom the picture out inside the tile.",
-        markers: [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100],
+        markers: [25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100],
         default: 100,
         stickToMarkers: false
+    },
+    hideTileBackground: {
+        type: OptionType.BOOLEAN,
+        description: "Turn off the background box behind profile pictures in call tiles and show only the picture.",
+        default: false
     }
 });
+
+// The mask is a rounded rect in a 100x100 viewbox, so its rx scales the slider
+// value with the painted picture; SVG clamps 52 to 50, which is the circle max.
+function avatarMask(rx: number): string {
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='${rx}' fill='#fff'/></svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
 
 export default definePlugin({
     name: "RoundedVCPFP",
@@ -69,10 +88,17 @@ export default definePlugin({
             || user.getDefaultAvatarURL?.()
             || "https://cdn.discordapp.com/embed/avatars/0.png";
 
+        const hideBg = settings.store.hideTileBackground;
         return {
             "--full-res-avatar": `url("${avatarUrl}")`,
             "--vc-pfp-radius": `${settings.store.cornerRadius}px`,
-            "--vc-pfp-zoom": `${settings.store.zoom / 100}`
+            "--vc-pfp-avatar-mask": avatarMask(Math.round(settings.store.avatarRadius)),
+            "--vc-pfp-avatar-radius": `${Math.round(settings.store.avatarRadius)}%`,
+            "--vc-pfp-zoom": `${settings.store.zoom / 100}`,
+            // Empty string clears the inline background so the toggle off restores
+            // Discord's paint; "none" hides the tile's own box when the switch is on.
+            background: hideBg ? "none" : "",
+            "--vc-pfp-hide-bg": hideBg ? "1" : ""
         };
     },
 });
