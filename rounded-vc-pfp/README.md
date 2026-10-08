@@ -6,6 +6,7 @@ Rounded full-resolution avatars on call tiles, with three sliders, a background 
 - Tile corner radius shapes the whole tile box in pixels (0-52 px, default 12).
 - Avatar zoom scales the picture inside the tile (25-100 %, default 100; lower values zoom the picture out inside the tile and the rounded corners scale with it).
 - Turn off the tile background removes the background box behind profile pictures so only the picture shows; focus and speaking highlights are hidden with it, and stream tiles keep their video.
+- Hide user backgrounds removes the backgrounds other users set with plugins like USRBG; left off, those stay visible even when the tile background switch is on.
 - Turn the glow on shapes a two-layer glow that trails the masked picture outline (radius, zoom and mask all carry along); it applies when the background switch is on.
 - Glow color takes the hex code of that glow, for example #45475a; the glow mixes its own transparency levels, so an alpha channel in the hex is ignored.
 
