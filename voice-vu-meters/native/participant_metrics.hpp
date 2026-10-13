@@ -20,6 +20,10 @@ struct ParticipantLevel {
     size_t frames;
     std::array<double, 2> rms{};
     std::array<double, 2> peak{};
+    // Mid (L+R)/2 and side (L-R)/2 RMS. Side catches width from delay or phase
+    // differences even when both channels are equally loud.
+    double mid = 0;
+    double side = 0;
 };
 
 class ParticipantMetrics {
@@ -42,11 +46,22 @@ public:
                 level.peak[channel] = std::max(level.peak[channel], std::abs(sample));
             }
         }
+        if (channels == 2) {
+            for (size_t frame = 0; frame < frames; ++frame) {
+                double left = pcm[frame * 2], right = pcm[frame * 2 + 1];
+                if constexpr (std::is_integral_v<Sample>) { left /= 32768.0; right /= 32768.0; }
+                level.mid += (left + right) * (left + right) * 0.25;
+                level.side += (left - right) * (left - right) * 0.25;
+            }
+            level.mid = std::sqrt(level.mid / frames);
+            level.side = std::sqrt(level.side / frames);
+        }
         for (size_t channel = 0; channel < channels; ++channel)
             level.rms[channel] = std::sqrt(level.rms[channel] / frames);
         if (channels == 1) {
             level.rms[1] = level.rms[0];
             level.peak[1] = level.peak[0];
+            level.mid = level.rms[0];
         }
         // Never wait for the renderer on the voice thread.
         std::unique_lock lock(mutex_, std::try_to_lock);
