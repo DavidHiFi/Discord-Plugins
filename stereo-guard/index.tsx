@@ -1,6 +1,7 @@
 /* eslint-disable simple-header/header -- This standalone user plugin is MIT licensed. */
 /*
  * StereoGuard
+ * Copyright (c) 2026 Kurtzon Audio
  * Copyright (c) 2026 DavidHiFi
  * SPDX-License-Identifier: MIT
  */
@@ -13,7 +14,7 @@ import { openPluginModal } from "@components/settings";
 import { Logger } from "@utils/Logger";
 import definePlugin, { makeRange, OptionType } from "@utils/types";
 import { findByPropsLazy } from "@webpack";
-import { Button, MediaEngineStore, React, RelationshipStore, showToast, Toasts, UserStore } from "@webpack/common";
+import { Button, MediaEngineStore, React, RelationshipStore, SelectedChannelStore, showToast, Toasts, UserStore, VoiceStateStore } from "@webpack/common";
 
 import { VolumeHold } from "./protection";
 
@@ -23,13 +24,23 @@ const IGNORED_KEY = "StereoGuard_ignored";
 const HELD_KEY = "StereoGuard_held_volumes";
 const POLL_MS = 50;
 const SCAN_MS = 500;
-const STALE_MS = 3000;
-const WINDOW_MS = 2000;
 const PAN_WINDOW_MS = 4000;
 const TRIGGER_COOLDOWN_MS = 3000;
-const NOISE_GATE = 0.02;
+const NOISE_GATE = 0.01;
 const RELEASE = 0.3;
-const LEVEL_FLOOR_DB = -45;
+// Slow decay so short pauses between words never erase the progress that
+// already built up, even when a high certainty count is configured.
+const EVIDENCE_DECAY = 0.96;
+// Never mute someone within this long of their audio first appearing, so a
+// person joining the call is always audible while their stream settles.
+const JOIN_GRACE_MS = 1000;
+// After the guard lets someone go (auto, by hand, or the owner changing their
+// volume), leave them alone for this long instead of holding them again.
+const REMUTE_COOLDOWN_MS = 5000;
+// A held user counts as safe once their score sits this far under the threshold.
+const RELEASE_MARGIN_DB = 6;
+// Native participant frames older than this are not evidence of anything.
+const NATIVE_MAX_AGE_MS = 150;
 
 const STEREO_GUARD_KEYS = ["enabled"] as const;
 
@@ -43,97 +54,96 @@ interface VoiceConnection {
     outputs?: Record<string, AudioOutput>;
     localMutes?: Record<string, boolean>;
     audioContext?: AudioContext;
-    emitter?: {
-        on?: (event: string, handler: (...args: any[]) => void) => void;
-        off?: (event: string, handler: (...args: any[]) => void) => void;
-    };
-    getUserIdBySsrc?: (ssrc: number) => string | null;
 }
 
-interface Meter {
+// Decoded left/right levels for one participant, from the native voice bridge
+// that VoiceVUMeters installs on Discord Desktop.
+interface NativeLevel {
+    userId: string;
+    ageMs: number;
+    channels: number;
+    rtpTimestamp: number;
+    rmsLeft: number;
+    rmsRight: number;
+    rmsMid?: number;
+    rmsSide?: number;
+}
+
+interface ParticipantBridge {
+    getParticipantStereoLevels(): { installed: boolean; connection: number; levels: NativeLevel[]; };
+}
+
+interface WebTap {
     output: AudioOutput;
+    stream: MediaStream;
     source: MediaStreamAudioSourceNode;
-    processor: ScriptProcessorNode;
-    frameAt: { value: number; };
+    splitter: ChannelSplitterNode;
+    left: AnalyserNode;
+    right: AnalyserNode;
     silent: GainNode;
     bufLeft: Float32Array<ArrayBuffer>;
     bufRight: Float32Array<ArrayBuffer>;
+}
+
+interface Meter {
+    tap?: WebTap;
     mono: boolean;
     score: number;
     pans: number[];
     panAt: number[];
-    loudTicks: number[];
+    evidence: number;
     lastTriggerAt: number;
+    frameAt: number;
+    lastStamp: number;
 }
 
 const meters = new Map<string, Meter>();
+const meterContexts = new WeakMap<VoiceConnection, AudioContext>();
 const mutedByUs = new Map<string, number>();
 const volumeHolds = new Map<string, VolumeHold>();
 const ignored = new Set<string>();
 const savedVolume = new Map<string, number>();
+// userId -> when their audio first appeared in the current call
+const firstSeen = new Map<string, number>();
+// userId -> don't hold before this timestamp (set on any release)
+const unmuteCooldownUntil = new Map<string, number>();
 
 const { setLocalVolume } = findByPropsLazy("setLocalVolume");
-const levels = new Map<string, number>();
-const levelAt = new Map<string, number>();
 
 let connection: VoiceConnection | null = null;
-let boundConnection: VoiceConnection | null = null;
+let nativeConnection = 0;
+let participantBridge: ParticipantBridge | undefined;
+let bridgeChecked = false;
 let intervalId: ReturnType<typeof setInterval> | undefined;
 let lastScanAt = 0;
-let captureRetryAt = 0;
-
-let mixMeter: Meter | null = null;
-let mixStream: MediaStream | null = null;
-let mixContext: AudioContext | null = null;
-let mixScore = 0;
-let captureDeviceLabel = "";
-let captureStarting = false;
 let persistQueue = Promise.resolve();
 
 const settings = definePluginSettings({
     enabled: {
         type: OptionType.BOOLEAN,
-        description: "Watch the call and mute anyone whose audio is obnoxiously wide, panned, or panning around.",
+        description: "Watch the call and silence anyone whose audio is not fully mono: slight panning, stereo width, panning around, or reverb tails.",
         default: true,
         onChange() {
             if (!settings.store.enabled) unmuteAll("silent");
         }
     },
-    desktopCapture: {
-        type: OptionType.BOOLEAN,
-        description: "Show the desktop output mix score for reference. A mixed capture cannot identify a participant and never triggers a mute.",
-        default: true,
-        onChange() {
-            stopCapture();
-            void syncCapture();
-        }
-    },
-    captureDevice: {
-        type: OptionType.STRING,
-        description: "Optional capture device name for desktop detection (for example 'Discord Input (VAIO 2)'). Leave empty to auto-match the current Discord output device.",
-        default: "",
-        onChange() {
-            stopCapture();
-            void syncCapture();
-        }
-    },
     threshold: {
         type: OptionType.SLIDER,
-        description: "How much stereo counts as obnoxious. Hard panning, panning around, and wide stereo music all push the score up; centered mono voice stays near zero. Check the live scores above.",
-        markers: makeRange(30, 100, 5),
-        default: 65,
+        description: "Silence when the stereo content passes this level, in dB relative to the center. -40 catches even a hint of panning or reverb; -4 only heavy stereo. Lower means stricter. Check the live scores above.",
+        markers: makeRange(-40, -4, 3),
+        default: -22,
         stickToMarkers: true
     },
     sensitivity: {
         type: OptionType.SLIDER,
-        description: "How much stereo audio is needed before a mute. Higher reacts to shorter bursts.",
+        description: "How much non-mono audio is needed before the guard acts. Higher reacts to shorter and quieter bits.",
         markers: makeRange(1, 10, 1),
-        default: 5,
+        default: 7,
         stickToMarkers: true
     },
     autoUnmute: {
         type: OptionType.SELECT,
-        description: "How long fresh participant-owned frames must stay below the release threshold before volume returns smoothly. Missing frames keep the hold. Off requires manual restore.",
+        description: "How long they have to STAY mono or quiet before their volume returns smoothly. Stereo again restarts the wait. Off keeps them silenced until you restore them.",
         options: [
             { label: "Off (stay muted)", value: 0 },
             { label: "3 seconds", value: 3 },
@@ -157,11 +167,12 @@ const settings = definePluginSettings({
     }
 });
 
-function toPercent(level: number) {
-    if (!Number.isFinite(level) || level <= 0) return 0;
+function toDb(score: number) {
+    return score > 0 ? Math.max(-60, 20 * Math.log10(score)) : -60;
+}
 
-    const db = 20 * Math.log10(Math.min(level, 1));
-    return Math.max(0, Math.min(100, Math.round(((db - LEVEL_FLOOR_DB) / -LEVEL_FLOOR_DB) * 100)));
+function fromDb(db: number) {
+    return Math.pow(10, db / 20);
 }
 
 function displayName(userId: string) {
@@ -203,115 +214,32 @@ function getConnection(): VoiceConnection | null {
     return null;
 }
 
-function channelCount(output: AudioOutput) {
-    return output.stream.getAudioTracks()[0]?.getSettings?.().channelCount ?? 0;
+function isWeb(conn: VoiceConnection | null): conn is VoiceConnection & { outputs: Record<string, AudioOutput>; } {
+    return Boolean(conn?.outputs && conn.audioContext);
 }
 
-function makeAnalyserPair(context: AudioContext, stream: MediaStream) {
-    const source = context.createMediaStreamSource(stream);
-    const processor = context.createScriptProcessor(2048, 2, 2);
-    const bufLeft = new Float32Array(2048);
-    const bufRight = new Float32Array(2048);
-    const frameAt = { value: 0 };
-    const silent = context.createGain();
-    silent.gain.value = 0;
-    processor.onaudioprocess = event => {
-        bufLeft.set(event.inputBuffer.getChannelData(0));
-        bufRight.set(event.inputBuffer.getChannelData(event.inputBuffer.numberOfChannels > 1 ? 1 : 0));
-        frameAt.value = Date.now();
-    };
-    source.connect(processor);
-    processor.connect(silent);
-    silent.connect(context.destination);
-    return { source, processor, silent, bufLeft, bufRight, frameAt };
+function inCall(userId: string) {
+    if (isWeb(connection)) return Boolean(connection.outputs[userId]);
+
+    const channelId = SelectedChannelStore.getVoiceChannelId();
+    return Boolean(channelId && VoiceStateStore.getVoiceStatesForChannel(channelId)?.[userId]);
 }
 
-function createMeter(conn: VoiceConnection, userId: string) {
-    if (!conn.outputs) return;
-
-    const output = conn.outputs[userId];
-    if (!output?.stream?.getAudioTracks().length || !conn.audioContext) return;
-
-    const pair = makeAnalyserPair(conn.audioContext, output.stream);
-
-    meters.set(userId, {
-        output,
-        ...pair,
-        mono: channelCount(output) !== 2,
-        score: 0,
-        pans: [],
-        panAt: [],
-        loudTicks: [],
-        lastTriggerAt: 0
-    });
+function newMeter(mono: boolean, tap?: WebTap): Meter {
+    return { tap, mono, score: 0, pans: [], panAt: [], evidence: 0, lastTriggerAt: 0, frameAt: 0, lastStamp: -1 };
 }
 
-function dropMeter(userId: string) {
-    const meter = meters.get(userId);
-    if (!meter) return;
+// Kurtzon's detector. Mid is (L + R) / 2 and side is (L - R) / 2. The score is
+// the highest of stereo width, left/right imbalance and pan swing over a
+// rolling window, from 0 (centered mono) to 1 (full width or hard pan).
+function scoreLevels(meter: Meter, rmsL: number, rmsR: number, midRms: number, sideRms: number, now: number) {
+    if (meter.mono) return 0;
 
-    meters.delete(userId);
-
-    try {
-        meter.source.disconnect();
-        meter.processor.onaudioprocess = null;
-        meter.processor.disconnect();
-        meter.silent.disconnect();
-    } catch (e) {
-        logger.error("failed to release a meter", e);
-    }
-}
-
-function syncMeters(conn: VoiceConnection) {
-    if (!conn.outputs) return;
-
-    for (const userId of Object.keys(conn.outputs)) {
-        const meter = meters.get(userId);
-        if (!meter || meter.output !== conn.outputs[userId]) {
-            dropMeter(userId);
-            createMeter(conn, userId);
-        } else {
-            meter.mono = channelCount(conn.outputs[userId]) !== 2;
-        }
-    }
-
-    for (const userId of [...meters.keys()]) {
-        if (!conn.outputs[userId]) dropMeter(userId);
-    }
-}
-
-function readScore(meter: Meter, now: number) {
-    if (meter.mono || now - meter.frameAt.value > 200) return 0;
-
-    const { length } = meter.bufLeft;
-    let sumLL = 0;
-    let sumRR = 0;
-    for (let i = 0; i < length; i++) {
-        const l = meter.bufLeft[i];
-        const r = meter.bufRight[i];
-        sumLL += l * l;
-        sumRR += r * r;
-    }
-
-    const rmsL = Math.sqrt(sumLL / length);
-    const rmsR = Math.sqrt(sumRR / length);
     const total = rmsL + rmsR;
     if (total < NOISE_GATE) return 0;
 
     const pan = (rmsR - rmsL) / total;
     const imbalance = Math.abs(pan);
-
-    let sumMid = 0;
-    let sumSide = 0;
-    for (let i = 0; i < length; i++) {
-        const mid = (meter.bufLeft[i] + meter.bufRight[i]) * 0.5;
-        const side = (meter.bufLeft[i] - meter.bufRight[i]) * 0.5;
-        sumMid += mid * mid;
-        sumSide += side * side;
-    }
-
-    const midRms = Math.sqrt(sumMid / length);
-    const sideRms = Math.sqrt(sumSide / length);
     const stereo = midRms + sideRms > 0 ? Math.min(1, (sideRms / (midRms + sideRms)) * 2) : 0;
 
     meter.pans.push(pan);
@@ -333,161 +261,198 @@ function readScore(meter: Meter, now: number) {
     return Math.max(stereo, imbalance, swing);
 }
 
-async function resolveCaptureDevice(): Promise<string | null> {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const inputs = devices.filter(d => d.kind === "audioinput");
-    const wanted = settings.store.captureDevice.trim();
+// --- Web audio path (browser, Vesktop, Equibop) ---
 
-    if (wanted) {
-        const match = inputs.find(d => d.deviceId === wanted || d.label === wanted || d.label.includes(wanted));
-        if (match) {
-            captureDeviceLabel = match.label;
-            return match.deviceId;
-        }
+// Discord closes and replaces its own audio context in some clients, which
+// froze every meter. The meters get their own context so they cannot die with
+// it, and 48 kHz avoids the stalls on 192 kHz devices.
+function getMeterContext(conn: VoiceConnection) {
+    let context = meterContexts.get(conn);
+    if (!context || context.state === "closed") {
+        context = new AudioContext({ sampleRate: 48000 });
+        meterContexts.set(conn, context);
     }
-
-    const outputId = MediaEngineStore.getOutputDeviceId();
-    let outputName = "";
-
-    try {
-        const outputs = await (MediaEngineStore.getMediaEngine() as any).getAudioOutputDevices();
-        const match = outputs?.find((d: any) => d.id === outputId || d.originalId === outputId);
-        outputName = match?.name ?? "";
-    } catch { }
-
-    if (outputName) {
-        const cleaned = outputName.replace(/^Default\s*\((.*)\)$/i, "$1");
-        const wanted = cleaned.replace(/\bOutput\b/i, "Input");
-        const match = inputs.find(d => d.label === wanted)
-            ?? inputs.find(d => /input/i.test(d.label) && d.label.startsWith(wanted.split(" (")[0]));
-        if (match) {
-            captureDeviceLabel = match.label;
-            return match.deviceId;
-        }
-    }
-
-    return null;
+    return context;
 }
 
-async function syncCapture() {
-    if (!settings.store.desktopCapture || !connection || connection.outputs) {
-        stopCapture();
-        return;
-    }
-
-    if (mixMeter || captureStarting || Date.now() < captureRetryAt) return;
-
-    captureStarting = true;
-    try {
-        const deviceId = await resolveCaptureDevice();
-        if (!deviceId) {
-            logger.warn("no capture device found for desktop stereo detection");
-            return;
-        }
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                deviceId: { exact: deviceId },
-                channelCount: 2,
-                echoCancellation: false,
-                noiseSuppression: false,
-                autoGainControl: false
-            },
-            video: false
-        });
-
-        if (!settings.store.desktopCapture || !connection || connection.outputs) {
-            stream.getTracks().forEach(t => t.stop());
-            return;
-        }
-
-        const context = new AudioContext();
-        void context.resume();
-        const pair = makeAnalyserPair(context, stream);
-        const capturedChannels = stream.getAudioTracks()[0]?.getSettings?.().channelCount ?? 0;
-
-        mixStream = stream;
-        mixContext = context;
-        mixScore = 0;
-        mixMeter = {
-            output: { id: "mix", stream },
-            ...pair,
-            mono: capturedChannels !== 2,
-            score: 0,
-            pans: [],
-            panAt: [],
-            loudTicks: [],
-            lastTriggerAt: 0
-        };
-
-        logger.info(`desktop stereo detection listening to ${captureDeviceLabel} (${capturedChannels}ch)`);
-    } catch (e) {
-        logger.error("failed to open the capture device", e);
-        captureDeviceLabel = "";
-        captureRetryAt = Date.now() + 30000;
-    } finally {
-        captureStarting = false;
-    }
+function closeMeterContext(conn: VoiceConnection) {
+    const context = meterContexts.get(conn);
+    if (context && context.state !== "closed") void context.close();
+    meterContexts.delete(conn);
 }
 
-function stopCapture() {
-    mixMeter = null;
-    mixScore = 0;
-
-    try {
-        mixStream?.getTracks().forEach(t => t.stop());
-        mixContext?.close();
-    } catch (e) {
-        logger.error("failed to release the capture device", e);
-    }
-
-    mixStream = null;
-    mixContext = null;
-    captureDeviceLabel = "";
+function channelCount(output: AudioOutput) {
+    return output.stream.getAudioTracks()[0]?.getSettings?.().channelCount ?? 2;
 }
 
-function onStats(payload: any) {
-    const now = Date.now();
-    const inbound = payload?.rtp?.inbound;
-    if (!inbound) return;
+function createWebMeter(conn: VoiceConnection & { outputs: Record<string, AudioOutput>; }, userId: string) {
+    const output = conn.outputs[userId];
+    if (!output?.stream?.getAudioTracks().length) return;
 
-    const entries: Array<[unknown, unknown]> = Array.isArray(inbound)
-        ? inbound.map(e => [null, e])
-        : Object.entries(inbound);
+    const context = getMeterContext(conn);
+    const source = context.createMediaStreamSource(output.stream);
+    const splitter = context.createChannelSplitter(2);
+    const left = context.createAnalyser();
+    const right = context.createAnalyser();
+    left.fftSize = 1024;
+    right.fftSize = 1024;
+    left.smoothingTimeConstant = 0;
+    right.smoothingTimeConstant = 0;
 
-    for (const [key, value] of entries) {
-        const list = Array.isArray(value) ? value : [value];
-        for (const entry of list) {
-            if (!entry || typeof entry !== "object") continue;
-            const mapped = connection?.getUserIdBySsrc?.(Number((entry as any).ssrc));
-            const keyed = typeof key === "string" && UserStore.getUser(key) ? key : null;
-            if (mapped && keyed && mapped !== keyed) continue;
-            const userId = mapped ?? keyed;
-            if (!userId) continue;
+    const silent = context.createGain();
+    silent.gain.value = 0;
 
-            levels.set(userId, Number((entry as any).audioLevel) || 0);
-            levelAt.set(userId, now);
-        }
-    }
+    source.connect(splitter);
+    splitter.connect(left, 0);
+    splitter.connect(right, 1);
+    left.connect(silent);
+    right.connect(silent);
+    silent.connect(context.destination);
+
+    meters.set(userId, newMeter(channelCount(output) === 1, {
+        output,
+        stream: output.stream,
+        source,
+        splitter,
+        left,
+        right,
+        silent,
+        bufLeft: new Float32Array(left.fftSize),
+        bufRight: new Float32Array(right.fftSize)
+    }));
 }
 
-function bindConnection(conn: VoiceConnection | null) {
-    if (conn === boundConnection) return;
-
-    boundConnection?.emitter?.off?.("stats", onStats);
-    boundConnection = conn;
-    conn?.emitter?.on?.("stats", onStats);
-}
-
-function sampleMix(now: number) {
-    const meter = mixMeter;
+function dropMeter(userId: string) {
+    const meter = meters.get(userId);
     if (!meter) return;
 
-    const score = readScore(meter, now);
-    meter.score = score >= meter.score ? score : meter.score + (score - meter.score) * RELEASE;
-    mixScore = meter.score;
+    meters.delete(userId);
+    if (!meter.tap) return;
 
+    try {
+        meter.tap.source.disconnect();
+        meter.tap.splitter.disconnect();
+        meter.tap.left.disconnect();
+        meter.tap.right.disconnect();
+        meter.tap.silent.disconnect();
+    } catch (e) {
+        logger.error("failed to release a meter", e);
+    }
 }
+
+function syncWebMeters(conn: VoiceConnection & { outputs: Record<string, AudioOutput>; }, now: number) {
+    for (const userId of Object.keys(conn.outputs)) {
+        if (!firstSeen.has(userId)) firstSeen.set(userId, now);
+        const output = conn.outputs[userId];
+        const meter = meters.get(userId);
+        // Discord swaps the stream on the same output object after every
+        // renegotiation. Rebuild the meter then too, or the guard watches a dead
+        // stream while the person keeps talking.
+        if (!meter?.tap || meter.tap.output !== output || meter.tap.stream !== output.stream) {
+            dropMeter(userId);
+            createWebMeter(conn, userId);
+        } else {
+            meter.mono = channelCount(output) === 1;
+        }
+    }
+
+    for (const userId of [...meters.keys()]) {
+        if (!conn.outputs[userId]) dropMeter(userId);
+    }
+
+    for (const userId of [...firstSeen.keys()]) {
+        if (!conn.outputs[userId]) firstSeen.delete(userId);
+    }
+}
+
+function readWeb(meter: Meter, now: number) {
+    const tap = meter.tap!;
+    tap.left.getFloatTimeDomainData(tap.bufLeft);
+    tap.right.getFloatTimeDomainData(tap.bufRight);
+
+    const { length } = tap.bufLeft;
+    let sumLL = 0;
+    let sumRR = 0;
+    let sumMid = 0;
+    let sumSide = 0;
+    for (let i = 0; i < length; i++) {
+        const l = tap.bufLeft[i];
+        const r = tap.bufRight[i];
+        sumLL += l * l;
+        sumRR += r * r;
+        sumMid += (l + r) * (l + r) * 0.25;
+        sumSide += (l - r) * (l - r) * 0.25;
+    }
+
+    meter.frameAt = now;
+    return scoreLevels(meter, Math.sqrt(sumLL / length), Math.sqrt(sumRR / length), Math.sqrt(sumMid / length), Math.sqrt(sumSide / length), now);
+}
+
+// --- Native path (Discord Desktop) ---
+
+function getBridge() {
+    if (!bridgeChecked) {
+        bridgeChecked = true;
+        try {
+            if (typeof DiscordNative !== "undefined") {
+                const voice = DiscordNative.nativeModules.requireModule("discord_voice") as Partial<ParticipantBridge>;
+                if (typeof voice.getParticipantStereoLevels === "function") participantBridge = voice as ParticipantBridge;
+            }
+        } catch (e) {
+            logger.error("cannot reach the participant PCM bridge", e);
+        }
+    }
+    return participantBridge;
+}
+
+function readNative(now: number) {
+    const bridge = getBridge();
+    if (!bridge) return null;
+
+    const snapshot = bridge.getParticipantStereoLevels();
+    if (!snapshot.installed || !snapshot.connection) return null;
+
+    if (snapshot.connection !== nativeConnection) {
+        nativeConnection = snapshot.connection;
+        for (const userId of [...meters.keys()]) dropMeter(userId);
+        firstSeen.clear();
+    }
+
+    const me = UserStore.getCurrentUser()?.id;
+    const fresh = new Map<string, NativeLevel>();
+    for (const level of snapshot.levels) {
+        if (level.userId === me || level.ageMs < 0 || level.ageMs > NATIVE_MAX_AGE_MS
+            || (level.channels !== 1 && level.channels !== 2)
+            || ![level.rmsLeft, level.rmsRight].every(value => Number.isFinite(value) && value >= 0 && value <= 1)) continue;
+
+        fresh.set(level.userId, level);
+        if (!firstSeen.has(level.userId)) firstSeen.set(level.userId, now);
+        if (!meters.has(level.userId)) meters.set(level.userId, newMeter(level.channels === 1));
+    }
+
+    return fresh;
+}
+
+function scoreNative(meter: Meter, level: NativeLevel, now: number) {
+    meter.mono = level.channels === 1;
+    meter.frameAt = now;
+
+    // The addon reports mid and side directly. An older addon without them can
+    // still catch panning and pan swing from the channel levels.
+    const hasSide = Number.isFinite(level.rmsMid) && Number.isFinite(level.rmsSide);
+    return scoreLevels(meter, level.rmsLeft, level.rmsRight, hasSide ? level.rmsMid! : 1, hasSide ? level.rmsSide! : 0, now);
+}
+
+function syncNativeMeters() {
+    for (const userId of [...meters.keys()]) {
+        if (!inCall(userId)) {
+            dropMeter(userId);
+            firstSeen.delete(userId);
+        }
+    }
+}
+
+// --- Holding ---
 
 function otherGuardHolds(userId: string): boolean {
     return Boolean((plugins.MicSpamGuard as any)?.isHolding?.(userId));
@@ -502,9 +467,11 @@ function updateProtection(now: number) {
     for (const [userId, hold] of [...volumeHolds]) {
         const current = MediaEngineStore.getLocalVolume(userId);
         if (Math.abs(current - hold.applied) >= 0.5) {
+            // The owner changed the volume by hand. Respect it and back off.
             volumeHolds.delete(userId);
             mutedByUs.delete(userId);
             savedVolume.delete(userId);
+            unmuteCooldownUntil.set(userId, now + REMUTE_COOLDOWN_MS);
             persistHeld();
             continue;
         }
@@ -518,9 +485,10 @@ function updateProtection(now: number) {
     }
 }
 
+// Silencing uses the user's local volume, not Discord's local mute, so their
+// audio keeps arriving and the guard can tell when they stop.
 function mute(userId: string, score: number) {
-    const meter = meters.get(userId);
-    if (!settings.store.enabled || !meter || meter.mono || connection?.outputs?.[userId] !== meter.output || isIgnored(userId) || mutedByUs.has(userId) || isLocalMuted(userId)) return;
+    if (!settings.store.enabled || isIgnored(userId) || mutedByUs.has(userId) || isLocalMuted(userId)) return;
 
     const base = heldBaseline(userId);
     if (!Number.isFinite(base) || base <= 0) return;
@@ -529,10 +497,10 @@ function mute(userId: string, score: number) {
     setLocalVolume(userId, 0);
     mutedByUs.set(userId, Date.now());
     persistHeld();
-    logger.debug(`muted ${userId} at ${Math.round(score * 100)}% stereo`);
+    logger.debug(`muted ${userId} at ${Math.round(toDb(score))} dB stereo`);
 
     if (settings.store.notify) {
-        showToast(`StereoGuard muted ${displayName(userId)} for obnoxious stereo (${Math.round(score * 100)}%).`, Toasts.Type.MESSAGE);
+        showToast(`StereoGuard muted ${displayName(userId)} for obnoxious stereo (${Math.round(toDb(score))} dB).`, Toasts.Type.MESSAGE);
     }
 }
 
@@ -545,6 +513,7 @@ function unmute(userId: string, mode: "manual" | "auto" | "silent") {
         setLocalVolume(userId, savedVolume.get(userId) ?? 100);
     }
     savedVolume.delete(userId);
+    unmuteCooldownUntil.set(userId, Date.now() + REMUTE_COOLDOWN_MS);
     persistHeld();
 
     if (mode === "silent" || !settings.store.notify) return;
@@ -557,82 +526,110 @@ function unmute(userId: string, mode: "manual" | "auto" | "silent") {
     );
 }
 
-function sample(userId: string, meter: Meter, now: number, needed: number) {
-    const score = readScore(meter, now);
-    meter.score = score >= meter.score ? score : meter.score + (score - meter.score) * RELEASE;
+function sample(userId: string, meter: Meter, raw: number, now: number, needed: number) {
+    meter.score = raw >= meter.score ? raw : meter.score + (raw - meter.score) * RELEASE;
 
-    const ownedFresh = !meter.mono && connection?.outputs?.[userId] === meter.output && now - meter.frameAt.value <= 200;
-    if (ownedFresh) volumeHolds.get(userId)?.observe(score <= Math.max(0, settings.store.threshold / 100 - 0.15), meter.frameAt.value);
-    if (!ownedFresh) { meter.loudTicks = []; return; }
+    const { threshold } = settings.store;
+    volumeHolds.get(userId)?.observe(meter.score < fromDb(threshold - RELEASE_MARGIN_DB), meter.frameAt);
 
-    if (score >= settings.store.threshold / 100 && !isIgnored(userId) && !mutedByUs.has(userId) && !isLocalMuted(userId)) {
-        meter.loudTicks.push(now);
-    }
+    const coolingDown = (unmuteCooldownUntil.get(userId) ?? 0) > now;
+    const settled = now - (firstSeen.get(userId) ?? now) >= JOIN_GRACE_MS;
+    const counts = meter.score >= fromDb(threshold) && !isIgnored(userId) && !mutedByUs.has(userId) && !isLocalMuted(userId) && !coolingDown && settled;
 
-    if (score < settings.store.threshold / 100) meter.loudTicks = [];
-    while (meter.loudTicks.length && now - meter.loudTicks[0] >= WINDOW_MS) meter.loudTicks.shift();
+    // Evidence builds up over the stereo bits and only decays slowly, so short
+    // pauses between words never wipe out progress.
+    meter.evidence = counts ? meter.evidence + 1 : meter.evidence * EVIDENCE_DECAY;
 
-    if (meter.loudTicks.length >= needed && now - meter.lastTriggerAt > TRIGGER_COOLDOWN_MS) {
-        meter.loudTicks = [];
+    if (meter.evidence >= needed && now - meter.lastTriggerAt > TRIGGER_COOLDOWN_MS) {
+        meter.evidence = 0;
         meter.lastTriggerAt = now;
-        mute(userId, score);
+        mute(userId, meter.score);
     }
+}
+
+function resetCall() {
+    unmuteAll("silent");
+    for (const userId of [...meters.keys()]) dropMeter(userId);
+    if (connection) closeMeterContext(connection);
+    firstSeen.clear();
+    nativeConnection = 0;
+    lastScanAt = 0;
 }
 
 function poll() {
     try {
         const conn = getConnection();
         if (conn !== connection) {
-            unmuteAll("silent");
-            for (const userId of [...meters.keys()]) dropMeter(userId);
+            resetCall();
             connection = conn;
-            levels.clear();
-            levelAt.clear();
-            stopCapture();
-            lastScanAt = 0;
         }
-        bindConnection(conn);
-
-        const now = Date.now();
-
-        for (const [userId] of levels) {
-            if (now - (levelAt.get(userId) ?? 0) >= STALE_MS) levels.set(userId, 0);
-        }
-
-        for (const userId of [...volumeHolds.keys()]) {
-            if (!conn?.outputs?.[userId] || isIgnored(userId) || isLocalMuted(userId)) unmute(userId, "silent");
-        }
-
-        void syncCapture();
-
-        if (mixMeter) sampleMix(now);
 
         if (!connection) return;
 
-        if (connection.outputs && now - lastScanAt >= SCAN_MS) {
+        const now = Date.now();
+        const web = isWeb(connection);
+        const native = web ? null : readNative(now);
+
+        if (now - lastScanAt >= SCAN_MS) {
             lastScanAt = now;
-            syncMeters(connection);
+            if (web) syncWebMeters(connection as VoiceConnection & { outputs: Record<string, AudioOutput>; }, now);
+            else syncNativeMeters();
+        }
+
+        for (const userId of [...volumeHolds.keys()]) {
+            if (!inCall(userId) || isIgnored(userId) || isLocalMuted(userId)) unmute(userId, "silent");
         }
 
         const { enabled, sensitivity } = settings.store;
-        if (!enabled || !connection.outputs) return;
+        if (!enabled) return;
 
         const needed = Math.max(1, 11 - Math.round(sensitivity));
-        for (const [userId, meter] of meters) sample(userId, meter, now, needed);
+        for (const [userId, meter] of meters) {
+            if (meter.tap) {
+                sample(userId, meter, readWeb(meter, now), now, needed);
+                continue;
+            }
+
+            if (!native) continue;
+            const level = native.get(userId);
+            if (!level) {
+                // The bridge is live and this person sends no audio: they are
+                // silent, which is as safe as mono.
+                meter.score *= 1 - RELEASE;
+                meter.evidence *= EVIDENCE_DECAY;
+                meter.frameAt = now;
+                volumeHolds.get(userId)?.observe(true, now);
+                continue;
+            }
+            // Count each decoded frame once.
+            if (level.rtpTimestamp === meter.lastStamp) continue;
+            meter.lastStamp = level.rtpTimestamp;
+            sample(userId, meter, scoreNative(meter, level, now), now, needed);
+        }
+
         updateProtection(now);
     } catch (e) {
         logger.error("poll failed", e);
     }
 }
 
+// The web build's DataStore stub can return promises that never settle, which
+// would leave start() (and every plugin after it) waiting forever. Cap the wait.
+function storeWithTimeout<T>(p: Promise<T>, ms = 1200): Promise<T | null> {
+    return Promise.race([
+        p.catch(() => null),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), ms)),
+    ]);
+}
+
 function persistHeld() {
     const held = Object.fromEntries(savedVolume);
-    persistQueue = persistQueue.then(() => DataStore.set(HELD_KEY, held)).catch(e => logger.error("failed to save held volumes", e));
+    persistQueue = persistQueue.then(() => storeWithTimeout(DataStore.set(HELD_KEY, held))).then(() => { }, e => logger.error("failed to save held volumes", e));
 }
 
 async function saveIgnored() {
     try {
-        await DataStore.set(IGNORED_KEY, [...ignored]);
+        await storeWithTimeout(DataStore.set(IGNORED_KEY, [...ignored]));
     } catch (e) {
         logger.error("failed to save the ignore list", e);
     }
@@ -649,11 +646,13 @@ function unmuteAll(mode: "manual" | "silent" = "manual") {
 }
 
 function ScoreRow({ userId }: { userId: string; }) {
-    const score = Math.round((meters.get(userId)?.score ?? 0) * 100);
+    const db = toDb(meters.get(userId)?.score ?? 0);
     const { threshold } = settings.store;
-    const hot = score >= threshold;
+    const hot = db >= threshold;
     const ignoredUser = isIgnored(userId);
     const muted = mutedByUs.has(userId);
+    const pct = Math.max(0, Math.min(100, (db + 40) / 40 * 100));
+    const thresholdPct = Math.max(0, Math.min(100, (threshold + 40) / 40 * 100));
 
     return (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0" }}>
@@ -661,11 +660,11 @@ function ScoreRow({ userId }: { userId: string; }) {
                 {displayName(userId)}
             </div>
             <div style={{ position: "relative", flex: 1, height: 10, borderRadius: 5, background: "var(--background-modifier-accent)", overflow: "hidden" }}>
-                <div style={{ width: `${score}%`, height: "100%", background: hot ? "var(--status-danger)" : "var(--status-positive)" }} />
-                <div style={{ position: "absolute", top: 0, left: `${threshold}%`, width: 2, height: "100%", background: "var(--text-muted)" }} />
+                <div style={{ width: `${pct}%`, height: "100%", background: hot ? "var(--status-danger)" : "var(--status-positive)" }} />
+                <div style={{ position: "absolute", top: 0, left: `${thresholdPct}%`, width: 2, height: "100%", background: "var(--text-muted)" }} />
             </div>
             <div style={{ width: 68, color: ignoredUser ? "var(--text-muted)" : "var(--header-secondary)", fontVariantNumeric: "tabular-nums" }}>
-                {score}%
+                {Math.round(db)} dB
             </div>
             <Button size={Button.Sizes.SMALL} color={Button.Colors.PRIMARY} onClick={() => toggleIgnored(userId)}>
                 {ignored.has(userId) ? "Allow" : "Ignore"}
@@ -684,30 +683,22 @@ function GuardPanel() {
     }, []);
 
     const live = [...meters.keys()];
-    const mixPercent = Math.round(mixScore * 100);
-    const { threshold } = settings.store;
+    const source = isWeb(connection) ? "Web audio streams" : getBridge() ? "Discord Desktop native participant audio" : null;
 
     return (
         <div style={{ marginBottom: 16 }}>
             <div style={{ color: "var(--header-primary)", fontWeight: 600, fontSize: 16 }}>Live stereo scores</div>
             <div style={{ color: "var(--header-secondary)", fontSize: 13, marginBottom: 8 }}>
-                Hard panning, swinging across the field, and wide stereo music score high. Centered mono voice scores near zero. The thin line is your threshold.
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0" }}>
-                <div style={{ width: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--header-primary)" }}>
-                    Output mix {captureDeviceLabel ? "" : "(not capturing)"}
-                </div>
-                <div style={{ position: "relative", flex: 1, height: 10, borderRadius: 5, background: "var(--background-modifier-accent)", overflow: "hidden" }}>
-                    <div style={{ width: `${mixPercent}%`, height: "100%", background: mixPercent >= threshold ? "var(--status-danger)" : "var(--status-positive)" }} />
-                    <div style={{ position: "absolute", top: 0, left: `${threshold}%`, width: 2, height: "100%", background: "var(--text-muted)" }} />
-                </div>
-                <div style={{ width: 68, color: "var(--header-secondary)", fontVariantNumeric: "tabular-nums" }}>{mixPercent}%</div>
+                Anything not centered mono shows up here in dB: slight panning, stereo width, panning around, and reverb all push the score up. -40 dB is the faintest stereo, 0 dB is full width. The thin line is your threshold.
             </div>
 
             {live.length === 0
-                ? <div style={{ color: "var(--text-muted)" }}>Per-user detection needs a web audio client. The desktop output mix is informational and cannot mute participants.</div>
+                ? <div style={{ color: "var(--text-muted)" }}>
+                    {source ? "Join a voice channel to see scores." : "No per-participant audio source. On Discord Desktop this needs the VoiceVUMeters native bridge."}
+                </div>
                 : live.map(userId => <ScoreRow key={userId} userId={userId} />)}
+
+            {source && <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 4 }}>Source: {source}</div>}
 
             {mutedByUs.size > 0 && (
                 <div style={{ marginTop: 12 }}>
@@ -776,8 +767,8 @@ function StereoGuardButton({ iconForeground, hideTooltips, nameplate }: UserArea
 
 export default definePlugin({
     name: "StereoGuard",
-    description: "Locally mutes anyone whose audio is obnoxiously in stereo: hard panned, panning around, or wide stereo music.",
-    authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
+    description: "Locally silences anyone whose audio is not fully mono: slight panning, stereo width, panning around, or reverb tails. Centered mono voice is never touched.",
+    authors: [{ name: "Kurtzon Audio", id: 1552878708732469258n }, { name: "DavidHiFi", id: 1553713171938938891n }],
     tags: ["Voice", "Utility"],
     enabledByDefault: true,
     settings,
@@ -793,7 +784,7 @@ export default definePlugin({
 
     async start() {
         try {
-            const saved = await DataStore.get(IGNORED_KEY);
+            const saved = await storeWithTimeout(DataStore.get(IGNORED_KEY));
             if (Array.isArray(saved)) {
                 for (const userId of saved) if (typeof userId === "string") ignored.add(userId);
             }
@@ -802,16 +793,20 @@ export default definePlugin({
         }
 
         try {
-            const held = await DataStore.get(HELD_KEY);
+            const held = await storeWithTimeout(DataStore.get(HELD_KEY));
             if (held && typeof held === "object") {
                 for (const [userId, volume] of Object.entries(held as Record<string, number>)) {
                     if (typeof volume === "number") setLocalVolume(userId, volume);
                 }
-                await DataStore.del(HELD_KEY);
+                await storeWithTimeout(DataStore.del(HELD_KEY));
             }
         } catch (e) {
             logger.error("failed to restore held volumes", e);
         }
+
+        // Older builds stored a positive percent threshold. Thresholds in dB
+        // are never positive, so anything above zero is an old value.
+        if (settings.store.threshold > 0) settings.store.threshold = -22;
 
         intervalId = setInterval(poll, POLL_MS);
     },
@@ -822,15 +817,10 @@ export default definePlugin({
             intervalId = undefined;
         }
 
-        stopCapture();
-        bindConnection(null);
-
-        for (const userId of [...meters.keys()]) dropMeter(userId);
+        resetCall();
         connection = null;
-
-        for (const userId of [...mutedByUs.keys()]) unmute(userId, "silent");
-        mutedByUs.clear();
-        levels.clear();
-        levelAt.clear();
+        participantBridge = undefined;
+        bridgeChecked = false;
+        unmuteCooldownUntil.clear();
     }
 });
