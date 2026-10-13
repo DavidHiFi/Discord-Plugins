@@ -21,4 +21,6 @@ Review the audit and generated files. Close Dopamine yourself before `node patch
 
 `artwork.cjs` is the RPC helper. `test-helper.cjs` tests helper behavior. `test-patch.cjs` is a legacy maintainer fixture with hardcoded archive paths; adapt those paths for your local staged archive before use. These tests do not establish that another Dopamine version can be patched.
 
+`node test-artwork-rpc.cjs` checks artwork delivery through the patched RPC class with offline catalogue responses. Set `DOPAMINE_TEST_ASAR` to your installed or staged patched archive and `TESTCORD_DIR` to the checkout that supplies `@electron/asar`. It checks the image in the outgoing activity, pause and resume, late lookup results, stopping playback, and the icon fallback when no catalogue cover matches. Artwork comes from a matching public catalogue entry. The helper does not upload embedded images or local music files.
+
 GPL-3.0-or-later. See the parent folder's LICENSE and source attribution.
