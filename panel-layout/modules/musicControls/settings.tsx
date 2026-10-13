@@ -77,7 +77,7 @@ function LyricsProviderSettings() {
                         onChange={v => {
                             settings.store.spotifyLyricsApiUrl = v;
                             void clearLyricsCache();
-                            showToast("Lyrics cache purged", Toasts.Type.SUCCESS);
+                            showToast("Lyrics cache purged", "success");
                         }}
                         placeholder="https://spotify-lyrics-api-pi.vercel.app"
                         maxLength={null}
@@ -125,7 +125,7 @@ export const settings = defineModuleSettings("MusicControls", {
         default: "https://spotify-lyrics-api-pi.vercel.app",
         onChange: async () => {
             await clearLyricsCache();
-            showToast("Lyrics cache purged", Toasts.Type.SUCCESS);
+            showToast("Lyrics cache purged", "success");
         }
     },
     spicyLyricsApiKey: {
@@ -148,7 +148,7 @@ export const settings = defineModuleSettings("MusicControls", {
         options: languages,
         onChange: async () => {
             await removeTranslations();
-            showToast("Translations cleared", Toasts.Type.SUCCESS);
+            showToast("Translations cleared", "success");
         }
     },
     lyricsConversion: {
@@ -184,7 +184,7 @@ export const settings = defineModuleSettings("MusicControls", {
                 color={ButtonCompat.Colors.RED}
                 onClick={() => {
                     clearLyricsCache();
-                    showToast("Lyrics cache purged", Toasts.Type.SUCCESS);
+                    showToast("Lyrics cache purged", "success");
                 }}
             >
                 Purge Cache

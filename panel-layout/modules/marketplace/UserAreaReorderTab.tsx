@@ -308,7 +308,6 @@ export function UserAreaReorderTab({
                         flexDirection: "column",
                         boxShadow: "0 4px 16px rgba(0, 0, 0, 0.3)",
                         overflow: "hidden",
-                        overflowY: "auto",
                         position: "unset",
                     }}
                 >
@@ -932,7 +931,7 @@ function ActionButtonsRow({ pluginSettings }: { pluginSettings?: any; }) {
     const isGrid3 = userPanelLayout === "split_grid3" || userPanelLayout === "grid3";
     const isGrid4 = userPanelLayout === "split_grid4";
 
-    let flexItemStyle: React.CSSProperties = { flex: "1 1 0px", minWidth: 0, height: `${size}px` };
+    let flexItemStyle: React.CSSProperties = { flex: `1 1 ${size}px`, minWidth: `${size}px`, height: `${size}px` };
     if (isGrid2) flexItemStyle = { flex: `0 0 calc(50% - (${gap}px / 2))`, height: `${size}px` };
     else if (isGrid3) flexItemStyle = { flex: `0 0 calc(33.333% - (${gap}px * 2 / 3))`, height: `${size}px` };
     else if (isGrid4) flexItemStyle = { flex: `0 0 calc(25% - (${gap}px * 3 / 4))`, height: `${size}px` };
@@ -941,7 +940,7 @@ function ActionButtonsRow({ pluginSettings }: { pluginSettings?: any; }) {
         <div
             style={{
                 display: "flex",
-                flexWrap: isGrid2 || isGrid3 || isGrid4 ? "wrap" : "nowrap",
+                flexWrap: "wrap",
                 alignItems: "center",
                 gap: `${gap}px`,
                 padding: "6px 8px 4px 8px",
@@ -967,6 +966,7 @@ function ActionButtonsRow({ pluginSettings }: { pluginSettings?: any; }) {
                             color: btn.id === "Game Activity" ? "var(--status-danger, #ed4245)" : "var(--interactive-normal, #b5bac1)",
                             cursor: "pointer",
                             ...flexItemStyle,
+                            minWidth: `${size}px`,
                             ...getBtnShapeStyle(cfg),
                         }}
                     >
@@ -1175,11 +1175,15 @@ function LiveAccountProfilePreview({ pluginSettings }: { pluginSettings?: any; }
 
     return (
         <div
-            className="container__37e49 vc-account-profile-preview"
+            className="vc-account-profile-preview"
             style={{
                 position: "relative",
                 display: "flex",
                 flexDirection: "column",
+                flexShrink: 0,
+                width: "100%",
+                height: "auto",
+                minHeight: 0,
                 boxSizing: "border-box",
                 borderRadius: "8px",
                 overflow: "hidden",
@@ -1267,12 +1271,14 @@ function LiveAccountProfilePreview({ pluginSettings }: { pluginSettings?: any; }
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: "6px",
                     padding: "6px 8px",
                     width: "100%",
                     boxSizing: "border-box",
                 }}
             >
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: "1 1 100px" }}>
                     <div style={{ position: "relative", width: "32px", height: "32px", flexShrink: 0 }}>
                         {avatarUrl ? (
                             <img

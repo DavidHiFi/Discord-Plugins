@@ -424,6 +424,8 @@ function FakeVoiceButton({ iconForeground, hideTooltips, nameplate }: UserAreaRe
         </div>
     );
 }
+const GuardedFakeVoiceButton = ErrorBoundary.wrap(FakeVoiceButton, { noop: true });
+
 export default definePlugin({
     name: "FakeVoice",
     description: "Fake mute, deafen, camera, stream, and game. Right-click the button for all options.",
@@ -471,7 +473,7 @@ export default definePlugin({
 
     userAreaButton: {
         icon: makeIcon(true),
-        render: ErrorBoundary.wrap(FakeVoiceButton, { noop: true })
+        render: props => <GuardedFakeVoiceButton {...props} />
     },
 
     state(type: "mute" | "deafen", real: boolean) {

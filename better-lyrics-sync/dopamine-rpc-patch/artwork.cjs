@@ -13,7 +13,7 @@ let current = null;
 // Discord RPC accepts either an uploaded asset key or a direct image URL for
 // the large image, so a resolved artwork URL can be sent as-is.
 function applyArtwork(args, url) {
-    if (!args || typeof args !== "object") return false;
+    if (!args || typeof args !== "object" || !url || args.largeImageKey === url) return false;
     try {
         args.largeImageKey = url;
         return true;
@@ -101,12 +101,7 @@ function lookupArtwork(title, artists) {
     return lookupCache.get(key);
 }
 
-// Called from Dopamine's own Discord RPC after each setPresence. While the
-// iTunes lookup runs, Dopamine publishes its stock icon; when the cover URL
-// resolves, we replay the same presence with the cover URL in one client
-// activity so the icon never lingers after a track change or a paused cover.
-let resender = null;
-
+// Replay through Dopamine's existing RPC client when the image changes.
 function setCurrent(args, resend) {
     const key = `${args.title}|${args.artists}`;
     const playing = !!args.shouldSendTimestamps;
@@ -114,7 +109,7 @@ function setCurrent(args, resend) {
     // resume inside that track instead of being cleared by the new state.
     const sameTrack = current && current.key === key;
     const knownArtwork = sameTrack ? current.artworkUrl : null;
-    current = {
+    const update = current = {
         key,
         title: args.title,
         artists: args.artists,
@@ -122,29 +117,24 @@ function setCurrent(args, resend) {
         startTime: playing && !args.startTime ? 0 : (playing ? args.startTime || 0 : 0),
         artworkUrl: knownArtwork,
     };
-    if (resend && typeof resend === "function") resender = resend;
-
-    // Dopamine has already published this update with its stock icon. When the
-    // cover for this track is already known, put it back on the activity now;
-    // this is what keeps the cover visible through a pause.
-    if (knownArtwork && !playing && resender && applyArtwork(args, knownArtwork)) {
-        try { resender(args); } catch { /* Dopamine reconnects on its own schedule */ }
+    // The patched RPC callback closes over args. Mutate its image before replay,
+    // and skip replay when it already carries the cover to avoid recursion.
+    if (knownArtwork && typeof resend === "function" && applyArtwork(args, knownArtwork)) {
+        try { resend(args); } catch { /* Dopamine retries its RPC connection. */ }
     }
 
     lookupArtwork(args.title, args.artists).then(url => {
-        if (!current || current.key !== key) return;
-        if (url === (current.artworkUrl || null)) return;
-        current.artworkUrl = url || null;
-        // The README promises the cover as the activity's large image, but the
-        // resolved url was only stored and served over the bridge; it never
-        // reached Discord, so the activity kept the stock icon.
-        if (resender && url && applyArtwork(args, url)) {
-            try { resender(args); } catch { /* Dopamine reconnects on its own schedule */ }
+        // A later pause, track change or clear invalidates this update, even if
+        // the later update happens to have the same song title and artist.
+        if (current !== update) return;
+        update.artworkUrl = url || null;
+        if (typeof resend === "function" && applyArtwork(args, url)) {
+            try { resend(args); } catch { /* Dopamine retries its RPC connection. */ }
         }
     });
 }
 
-function clearCurrent() { current = null; resender = null; }
+function clearCurrent() { current = null; }
 
 const server = http.createServer((request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "https://discord.com");

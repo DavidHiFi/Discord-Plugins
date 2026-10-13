@@ -5,6 +5,7 @@
  */
 
 import "./styles.css";
+import "./spotify/lyrics/spicyAnimator/spicyWordAnimation.css";
 
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
@@ -12,13 +13,13 @@ import ErrorBoundary from "@components/ErrorBoundary";
 import { Flex } from "@components/Flex";
 import { FormSwitch } from "@components/FormSwitch";
 import { Paragraph } from "@components/Paragraph";
-import { Input } from "@testcordplugins/jstextreplace/components/Input";
 import { Devs, EquicordDevs } from "@utils/constants";
 import { makeRange } from "@utils/types";
 import type { RenderModalProps } from "@vencord/discord-types";
 import { Modal, openModalLazy, React, Select, showToast, Slider, Toasts, useState } from "@webpack/common";
 
 import type { UserAreaModule } from "../types";
+import { Input } from "./Input";
 import { settings, toggleBetterSpotifyControls, toggleHoverControls } from "./settings";
 import { clearLyricsCache, migrateOldLyrics } from "./spotify/lyrics/api";
 import { SpotifyLyrics } from "./spotify/lyrics/components/lyrics";

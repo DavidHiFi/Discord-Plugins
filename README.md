@@ -18,12 +18,12 @@ Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/
 | [StaffTag](stafftag/) | Staff badges in chat, member lists and profiles. | `src/userplugins/staffTag` |
 | [FakeVoice](fakevoice/) | Local fake voice states, a native loopback bridge and Stream Deck controls. | `src/userplugins/fakevoice` |
 | [LyricsStatus](better-lyrics-sync/) | Current lyric lines in custom status, with the Dopamine RPC companion. | `src/testcordplugins/lyricsStatus` |
-| [StreamEnhancer](stream-enhancer/) | DavidHiFi fork with native camera previews and spoofed resolution/FPS badges. | `src/testcordplugins/StreamEnhancer` |
+| [StreamEnhancer](stream-enhancer/) | DavidHiFi fork with native camera previews, spoofed panel previews and spoofed resolution/FPS badges. | `src/testcordplugins/StreamEnhancer` |
 | [Custom Stream Quality](custom-stream-quality/) | Encoder controls and independent advertised stream badges. | `src/testcordplugins/StreamQuality` |
-| [RoundedVcPfp](rounded-vc-pfp/) | Rounded full-resolution avatars on call tiles, with independent picture and tile radius (0-52 each), zoom (25-100 %), a bare-picture background switch, an optional user-backgrounds switch and a customizable glow. | `src/userplugins/RoundedVcPfp` |
+| [RoundedVcPfp](rounded-vc-pfp/) | Rounded full-resolution avatars on call tiles, with independent picture and tile radius (0-52 each), zoom (25-100 %), a bare-picture background switch, an optional user-backgrounds switch, a customizable glow and a speaking ring that keeps camera tiles on Discord's own border. | `src/userplugins/RoundedVcPfp` |
 | [MicSpamGuard](mic-spam-guard/) | Gentle voice balancing and sustained extreme-loudness protection. | `src/userplugins/MicSpamGuard` |
 | [StereoGuard](stereo-guard/) | Stereo detection for known per-participant streams; no guessed output-mix mutes. | `src/userplugins/StereoGuard` |
-| [VoiceVUMeters](voice-vu-meters/) | Per-participant left/right meters, with an audited native bridge for desktop remote stereo. | `src/userplugins/VoiceVUMeters` |
+| [VoiceVUMeters](voice-vu-meters/) | Per-participant left/right meters with selectable tile placements, stream-tile metering and an audited native bridge for desktop remote stereo. | `src/userplugins/VoiceVUMeters` |
 | [HasStrip](has-strip/) | Removes costly :has() stylesheet rules, with visual tradeoffs. | `src/testcordplugins/HasStrip` |
 | [PanelLayout](panel-layout/) | The maintained TestCord panel layout, including the ping-freshness fix. | `src/testcordplugins/PanelLayout` |
 

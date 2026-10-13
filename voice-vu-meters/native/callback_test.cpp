@@ -28,5 +28,17 @@ int main() {
     metrics.observe(2, "111", mono, 2, 48000, 1, 101, 2000);
     values = metrics.snapshot(2000);
     assert(values.size() == 1 && values[0].rms[0] == 0.125 && values[0].rms[1] == 0.125);
-    std::cout << "PASS participant identity, isolated stereo PCM, independent peaks, mono, invalid metadata and stale cleanup\n";
+    assert(values[0].mid == 0.125 && values[0].side == 0);
+    // Centered stereo has no side; inverted channels are all side; hard pan splits evenly.
+    const float centered[] = {0.5f,0.5f, -0.5f,-0.5f};
+    const float inverted[] = {0.5f,-0.5f, -0.5f,0.5f};
+    metrics.observe(3, "333", centered, 2, 48000, 2, 1, 3000);
+    metrics.observe(3, "444", inverted, 2, 48000, 2, 1, 3000);
+    metrics.observe(3, "555", left, 2, 48000, 2, 1, 3000);
+    for (const auto& value : metrics.snapshot(3000)) {
+        if (value.user == "333") assert(value.mid == 0.5 && value.side == 0);
+        if (value.user == "444") assert(value.mid == 0 && value.side == 0.5);
+        if (value.user == "555") assert(value.mid == 0.25 && value.side == 0.25);
+    }
+    std::cout << "PASS participant identity, isolated stereo PCM, independent peaks, mono, mid/side, invalid metadata and stale cleanup\n";
 }

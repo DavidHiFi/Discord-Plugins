@@ -1,37 +1,48 @@
 /*
  * Vencord, a Discord client mod
+ * Copyright (c) 2026 Vendicated and contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import { Logger } from "@utils/Logger";
 import definePlugin from "@utils/types";
 
-const RESCAN_MS = 120_000;
+const RESCAN_MS = 600_000;
+// The forced rescan catches CSSOM writes that bypass the DOM (insertRule on an
+// existing sheet). The MutationObserver path covers every DOM-level change
+// (new style tags, the theme watcher's reloads), so the long interval is the
+// only slower cadence here - it trades spike frequency for coverage latency.
 const DEBOUNCE_MS = 800;
+const logger = new Logger("HasStrip");
 
 let observer: MutationObserver | undefined;
 let intervalId: ReturnType<typeof setInterval> | undefined;
 let debounceId: ReturnType<typeof setTimeout> | undefined;
+let rescanId: ReturnType<typeof setTimeout> | undefined;
 let totalRemoved = 0;
-const processed = new WeakSet<CSSStyleSheet>();
+let processed = new WeakSet<CSSStyleSheet>();
+const removedRules: Array<{ owner: CSSStyleSheet | CSSGroupingRule; index: number; text: string; }> = [];
 
 function stripSheet(sheet: CSSStyleSheet): number {
     let removed = 0;
     try {
-        const walk = (owner: any, rules: CSSRuleList) => {
+        const walk = (owner: CSSStyleSheet | CSSGroupingRule, rules: CSSRuleList) => {
             for (let i = rules.length - 1; i >= 0; i--) {
-                const rule: any = rules[i];
+                const rule = rules[i];
                 let selector: string | null = null;
-                try { selector = rule.selectorText ?? null; } catch { /* ignore */ }
+                try { selector = "selectorText" in rule && typeof rule.selectorText === "string" ? rule.selectorText : null; } catch { /* inaccessible rule */ }
                 if (selector && selector.includes(":has(")) {
                     try {
+                        const text = rule.cssText;
                         owner.deleteRule(i);
+                        removedRules.push({ owner, index: i, text });
                         removed++;
                         continue;
                     } catch { /* not deletable at this level, leave it */ }
                 }
                 let nested: CSSRuleList | null = null;
-                try { nested = rule.cssRules ?? null; } catch { /* ignore */ }
-                if (nested && nested.length) walk(rule, nested);
+                try { nested = "cssRules" in rule ? (rule as CSSGroupingRule).cssRules : null; } catch { /* inaccessible rule */ }
+                if (nested && nested.length) walk(rule as CSSGroupingRule, nested);
             }
         };
         walk(sheet, sheet.cssRules);
@@ -39,16 +50,33 @@ function stripSheet(sheet: CSSStyleSheet): number {
     return removed;
 }
 
+function rescan(sheets: CSSStyleSheet[], index: number, removed: number) {
+    if (index < sheets.length) {
+        processed.add(sheets[index]);
+        rescanId = setTimeout(rescan, 0, sheets, index + 1, removed + stripSheet(sheets[index]));
+        return;
+    }
+    rescanId = undefined;
+    if (removed > 0) {
+        totalRemoved += removed;
+        logger.info(`Removed ${removed} :has() rules; total ${totalRemoved}`);
+    }
+}
+
 function scan(force: boolean) {
+    if (force) {
+        if (rescanId === undefined) rescanId = setTimeout(rescan, 0, Array.from(document.styleSheets), 0, 0);
+        return;
+    }
     let removed = 0;
     for (const sheet of Array.from(document.styleSheets)) {
-        if (!force && processed.has(sheet)) continue;
+        if (processed.has(sheet)) continue;
         processed.add(sheet);
         removed += stripSheet(sheet);
     }
     if (removed > 0) {
         totalRemoved += removed;
-        console.log(`[HasStrip] removed ${removed} :has() rule(s); total ${totalRemoved}`);
+        logger.info(`Removed ${removed} :has() rules; total ${totalRemoved}`);
     }
 }
 
@@ -59,8 +87,8 @@ function scheduleScan() {
 
 export default definePlugin({
     name: "HasStrip",
-    description: "Removes :has() selector rules from stylesheets. Blink re-tests whole ancestor chains on every DOM mutation while :has() is present; Discord ships ~116 such rules, and with a busy call + plugin widgets the client burned 40-60% of a core in style recalcs. Stripping them cuts style-recalc ~10x. Tradeoff: a handful of hover/focus micro-styling that depends on :has() no longer applies.",
-    authors: [],
+    description: "Removes :has() stylesheet rules to reduce style recalculation cost, with visual tradeoffs.",
+    authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
     start() {
         scan(false);
         observer = new MutationObserver(scheduleScan);
@@ -72,6 +100,17 @@ export default definePlugin({
         observer = undefined;
         if (intervalId !== undefined) clearInterval(intervalId);
         if (debounceId !== undefined) clearTimeout(debounceId);
-        intervalId = debounceId = undefined;
+        if (rescanId !== undefined) clearTimeout(rescanId);
+        intervalId = debounceId = rescanId = undefined;
+        for (const { owner, index, text } of removedRules.reverse()) {
+            try {
+                owner.insertRule(text, Math.min(index, owner.cssRules.length));
+            } catch (e) {
+                logger.debug("Could not restore a stylesheet rule", e);
+            }
+        }
+        removedRules.length = 0;
+        processed = new WeakSet();
+        totalRemoved = 0;
     }
 });

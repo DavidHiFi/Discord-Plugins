@@ -22,7 +22,7 @@ export default definePlugin({
                 {
                     // Local edit: capture the row's user and localMute by name instead of
                     // hardcoding minified variables, which point elsewhere in this build.
-                    match: /(?<=user:(\i),disconnected:.{0,900}?localMute:(\i).{0,500}?)children:(\i)(?=\},"mute"\)\))/,
+                    match: /(?<=user:(\i),disconnected:.{0,900}?localMute:(\i).{0,500}?)children:(\i)(?=\},"mute"[)}\]])/,
                     replace: "children:$2?$self.renderClickable($1,$3):$3"
                 }
             ]

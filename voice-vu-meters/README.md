@@ -10,7 +10,13 @@ Desktop remote stereo requires the companion native bridge. It reads signed 16-b
 
 The helper retains only levels, never participant audio. Stale samples expire. Closed connections and stream-sharing connections cannot supply another call's meters. Production code preserves the native callback, return value and playback flags. It does not change input capture, encoding, device selection, gain or routing. The isolated decoder test has separate input-disable and output-discard controls that are absent from the shipped addon.
 
-The helper accepts only the audited Windows x64 voice binary with SHA256 `4039dcd110a2d2b17672a62f94d11dd5a9a4e59ab2420915ef1362a29467a4a5`. A changed native binary disables the tap. Without the bridge, Desktop falls back to one scalar level through your local pan; its tooltip identifies that limitation. A shared output mix never supplies participant identity.
+The helper's audited Windows x64 voice binary has SHA256 `388166dc7e02b37b21024e642fd3099af92cdb4524a61340db88c4cbe3ebf423`. `native/Install-Bridge.ps1` verifies that hash and refuses to touch anything else. Without the bridge, Desktop falls back to one scalar level through your local pan; its tooltip identifies that limitation. A shared output mix never supplies participant identity.
+
+## Settings and validation
+
+Floor sets the bottom of the meter scale. Show Peak holds each channel's peak for 1.5 seconds, then falls at 12 dB per second. Show Self controls the selected input meter. Two bars and the divider remain visible for mono participants.
+
+Tile surfaces chooses which call tiles show meters: the background layer, the profile-picture layer, or a compact side bar with its own height setting. Screen-share tiles meter the stream's own audio and show nothing while the stream is silent. Go-live streams ride their own connection, so their meters follow the streamer. A self-tap that disagrees with your outbound levels for five seconds is dropped in favour of outbound levels, so echo-cancelled or noise-suppressed captures cannot pin your own meter.
 
 ## Install
 

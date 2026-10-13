@@ -17,8 +17,10 @@ import { AppsIcon, ScreenshareIcon, VideoIcon } from "@components/Icons";
 import { Paragraph } from "@components/Paragraph";
 import { getTestcordIconColor, ICON_COLOR_FALLBACK } from "@testcordplugins/TestcordHelper/iconColors";
 import { TestcordDevs } from "@utils/constants";
+import { classNameToSelector } from "@utils/css";
 import definePlugin, { makeRange, OptionType } from "@utils/types";
 import type { RenderModalProps } from "@vencord/discord-types";
+import { findCssClassesLazy } from "@webpack";
 import { Modal, openModalLazy, React, Select, Slider } from "@webpack/common";
 
 import {
@@ -58,6 +60,20 @@ import { SettingsGearIcon } from "./modules/icons";
 
 migratePluginSettings("deraculpanellayout", "PanelLayout");
 migratePluginSettings("deracul-panel-layout", "PanelLayout");
+
+// PanelLayout was `required`, and isPluginEnabled short-circuits to true on that flag, so it
+// ran for everyone without ever writing an `enabled` key. Now that it is an ordinary optional
+// plugin, a missing key reads as off and would silently disable it for anyone who had it.
+// Presence of its own settings is what distinguishes "was running" from "never used it", so
+// only those get the state `required` used to imply. An explicit false is left alone, so
+// turning it off later is never undone.
+{
+    const existing = SettingsStore.plain.plugins.PanelLayout;
+    if (existing && existing.enabled === undefined) {
+        SettingsStore.plain.plugins.PanelLayout = { ...existing, enabled: true };
+        SettingsStore.markAsChanged();
+    }
+}
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
@@ -119,7 +135,7 @@ export const settings = definePluginSettings({
         ],
         onChange: () => apply()
     },
-    panelBackgroundColor: { type: OptionType.STRING, description: "Panel background color", default: "var(--background-base-lower)", onChange: () => apply() },
+    panelBackgroundColor: { type: OptionType.STRING, description: "Panel background color", default: "var(--background-gradient-highest, var(--background-base-low))", onChange: () => apply() },
     panelBackgroundOpacity: { type: OptionType.SLIDER, description: "Panel background color opacity", default: 100, markers: makeRange(0, 100, 10), stickToMarkers: false, onChange: () => apply() },
     glowColor: { type: OptionType.STRING, description: "Glow hover color", default: "#ffffff", onChange: () => apply() },
     forceNativeButtonColor: { type: OptionType.BOOLEAN, default: false, description: "Force the icon color on Discord's native buttons (Mute, Deafen, Settings) even when no custom icon color is set", onChange: () => apply() },
@@ -422,6 +438,7 @@ function stopObserver() {
 
 const STYLE_ID = "deracul-panel-layout";
 const CUSTOM_STYLE_ID = "deracul-panel-custom";
+const VoicePanelClasses = findCssClassesLazy("wrapper", "container", "actionButtons");
 
 function gridCSS(selector: string, cols: number, gap: number) {
     return `
@@ -922,9 +939,8 @@ function buildCustomCSS(): string {
 
             if (item.type === "voice-connected") {
                 lines.push(`
-                    section[class*="panels_"] > ${S.callContainer},
-                    section[class*="panels_"] > [class*="container_e131a9"],
-                    section[class*="panels_"] > div:has(${S.callControls}) {
+                    section[class*="panels_"] > ${classNameToSelector(VoicePanelClasses.wrapper)},
+                    section[class*="panels_"] > ${classNameToSelector(VoicePanelClasses.container)} {
                         order: ${orderVal} !important;
                         ${hiddenStyle}
                     }
@@ -3390,7 +3406,7 @@ function PanelLayoutModal({ modalProps }: { modalProps: RenderModalProps; }) {
                         <SectionHeading>Panel Colors</SectionHeading>
                         <Card variant="primary">
                             <div style={{ display: "grid", gap: "8px" }}>
-                                <ColorRow label="Panel Background Color" value={s.panelBackgroundColor} onChange={v => set("panelBackgroundColor", v)} preset="var(--background-base-lower)" preset2="#242429" />
+                                <ColorRow label="Panel Background Color" value={s.panelBackgroundColor} onChange={v => set("panelBackgroundColor", v)} preset="var(--background-gradient-highest, var(--background-base-low))" preset2="#242429" />
                                 <SliderRow label="Background Opacity" value={s.panelBackgroundOpacity ?? 100} min={0} max={100} unit="%" onChange={v => set("panelBackgroundOpacity", Math.round(v))} resetKey={resetKey} />
 
                                 {settings.store.hoverEffect === "glow" && <>
@@ -3463,7 +3479,6 @@ export default definePlugin({
             Open Panel Layout Editor
         </Button>
     ),
-    required: true,
 
     patches: [
         {

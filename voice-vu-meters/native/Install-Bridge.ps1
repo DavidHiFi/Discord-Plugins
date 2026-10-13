@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $payload = Join-Path $env:LOCALAPPDATA 'DiscordStereoLoader/payload'
 $voice = Join-Path $payload 'discord_voice.node'
 $index = Join-Path $payload 'index.js'
-$audited = '4039dcd110a2d2b17672a62f94d11dd5a9a4e59ab2420915ef1362a29467a4a5'
+$audited = '388166dc7e02b37b21024e642fd3099af92cdb4524a61340db88c4cbe3ebf423'
 if (-not (Test-Path -LiteralPath $voice) -or (Get-FileHash -LiteralPath $voice).Hash.ToLowerInvariant() -ne $audited) {
     throw 'This native voice build has not been audited. No files were changed.'
 }
