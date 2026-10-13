@@ -1,6 +1,7 @@
 /* eslint-disable simple-header/header -- This standalone user plugin is MIT licensed. */
 /*
  * MicSpamGuard
+ * Copyright (c) 2026 Kurtzon Audio
  * Copyright (c) 2026 DavidHiFi
  * SPDX-License-Identifier: MIT
  *
@@ -10,6 +11,8 @@
  */
 
 import { DataStore } from "@api/index";
+import NotificationComponent from "@api/Notifications/NotificationComponent";
+import { persistNotification } from "@api/Notifications/notificationLog";
 import { plugins } from "@api/PluginManager";
 import { definePluginSettings } from "@api/Settings";
 import { UserAreaButton, UserAreaRenderProps } from "@api/UserArea";
@@ -17,7 +20,7 @@ import { openPluginModal } from "@components/settings";
 import { Logger } from "@utils/Logger";
 import definePlugin, { makeRange, OptionType } from "@utils/types";
 import { findByCodeLazy, findByPropsLazy } from "@webpack";
-import { Button, MediaEngineStore, React, RelationshipStore, SelectedChannelStore, showToast, Toasts, UserStore, VoiceStateStore } from "@webpack/common";
+import { Button, lodash, MediaEngineStore, React, ReactDOM, RelationshipStore, SelectedChannelStore, UserStore, VoiceStateStore } from "@webpack/common";
 
 import { VolumeHold } from "./protection";
 
@@ -34,14 +37,21 @@ const SPEECH_HOLD_MS = 1500;
 const AUTO_RATIO = 2;
 const AUTO_CEILING = 200;
 const AUTO_GATE_DB = -48;
+const VOLUME_DEADBAND = 0.05;
+const PERSIST_DEBOUNCE_MS = 1000;
+const NOTICE_LIFETIME_MS = 3000;
 
 const MIC_GUARD_KEYS = ["enabled"] as const;
+
+interface VoiceStats {
+    rtp?: { inbound?: Record<string, unknown> | unknown[]; };
+}
 
 interface VoiceConnection {
     context: string;
     emitter?: {
-        on?: (event: string, handler: (...args: any[]) => void) => void;
-        off?: (event: string, handler: (...args: any[]) => void) => void;
+        on?: (event: string, handler: (payload: VoiceStats) => void) => void;
+        off?: (event: string, handler: (payload: VoiceStats) => void) => void;
     };
     localMutes?: Record<string, boolean>;
     getUserIdBySsrc?: (ssrc: number) => string | null;
@@ -49,7 +59,7 @@ interface VoiceConnection {
 
 interface InboundSample {
     userId: string;
-    entry: Record<string, any>;
+    entry: Record<string, unknown>;
 }
 
 interface TurnedDown {
@@ -62,6 +72,9 @@ interface TurnedDown {
     sampleAt: number;
     speechAt: number;
     speechMs: number;
+    noticeAt?: number;
+    noticeDirection?: number;
+    noticeVolume?: number;
 }
 
 const levels = new Map<string, number>();
@@ -83,6 +96,7 @@ let connection: VoiceConnection | null = null;
 let boundConnection: VoiceConnection | null = null;
 let intervalId: ReturnType<typeof setInterval> | undefined;
 let persistQueue = Promise.resolve();
+let heldWrite: { (): void; flush(): void; } | undefined;
 
 const settings = definePluginSettings({
     enabled: {
@@ -91,6 +105,7 @@ const settings = definePluginSettings({
         default: true,
         onChange() {
             if (!settings.store.enabled) {
+                clearNotices();
                 unmuteAll("silent");
                 restoreAll("silent");
             }
@@ -133,7 +148,7 @@ const settings = definePluginSettings({
     autoUnmute: {
         type: OptionType.SELECT,
         displayName: "Auto unmute",
-        description: "How long fresh safe voice audio must continue before volume returns smoothly. Silence or missing samples cannot reopen a held volume. Off requires manual restore.",
+        description: "How long quiet audio or inactivity must continue before volume returns smoothly to 100%. New loud audio cancels recovery. Off requires manual restore.",
         hidden: () => !settings.store.autoMute,
         options: [
             { label: "Off (stay muted)", value: 0 },
@@ -200,14 +215,96 @@ const settings = definePluginSettings({
     },
     notify: {
         type: OptionType.BOOLEAN,
-        description: "Show a toast for mute, unmute, and manual volume restore. Automatic balancing stays silent.",
-        default: true
+        description: "Show one live activity card and keep actions in notification history.",
+        default: true,
+        onChange(on: boolean) { if (!on) clearNotices(); }
+    },
+    notificationMode: {
+        type: OptionType.SELECT,
+        displayName: "Notification detail",
+        description: "Standard shows mutes and restores. Verbose adds balancing changes and explains each action.",
+        hidden: () => !settings.store.notify,
+        onChange() { clearNotices(); },
+        options: [
+            { label: "Standard", value: "standard", default: true },
+            { label: "Verbose", value: "verbose" }
+        ]
     }
 });
 
 function displayName(userId: string) {
     const user = UserStore.getUser(userId);
     return user?.globalName ?? user?.username ?? userId;
+}
+
+interface GuardNoticeItem { key: string; body: string; warning: boolean; at: number; }
+let noticeItems: GuardNoticeItem[] = [];
+let noticeChannelId: string | null = null;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+const noticeSubscribers = new Set<() => void>();
+
+function publishNotices() {
+    for (const listener of noticeSubscribers) listener();
+}
+
+function clearNotices() {
+    if (noticeTimer !== undefined) clearTimeout(noticeTimer);
+    noticeTimer = undefined;
+    noticeChannelId = null;
+    noticeItems = [];
+    publishNotices();
+}
+
+function expireNotices() {
+    if (noticeChannelId !== SelectedChannelStore.getVoiceChannelId()) { clearNotices(); return; }
+    const now = Date.now();
+    noticeItems = noticeItems.filter(item => now - item.at < NOTICE_LIFETIME_MS);
+    publishNotices();
+    scheduleNoticeExpiry();
+}
+
+function scheduleNoticeExpiry() {
+    if (noticeTimer !== undefined) clearTimeout(noticeTimer);
+    noticeTimer = noticeItems.length
+        ? setTimeout(expireNotices, Math.max(1, noticeItems[0].at + NOTICE_LIFETIME_MS - Date.now()))
+        : undefined;
+}
+
+function subscribeNotices(listener: () => void) {
+    noticeSubscribers.add(listener);
+    return () => { noticeSubscribers.delete(listener); };
+}
+
+function noticeSnapshot() { return noticeItems; }
+
+function GuardNotice() {
+    const items = React.useSyncExternalStore(subscribeNotices, noticeSnapshot, noticeSnapshot);
+    if (!items.length) return null;
+    return ReactDOM.createPortal(
+        <NotificationComponent title="MicSpamGuard" body={items.map(item => item.body).join("\n")}
+            richBody={<div>{items.map(item => <p key={item.key} className="vc-notification-p">{item.body}</p>)}</div>}
+            color={items.some(item => item.warning) ? "#f9e2af" : "#a6e3a1"}
+            permanent onClose={clearNotices} />,
+        document.body
+    );
+}
+
+function notifyAction(message: string, options: { warning?: boolean; verboseOnly?: boolean; details?: string; userId?: string; } = {}) {
+    if (!settings.store.notify) return;
+    const verbose = settings.store.notificationMode === "verbose";
+    if (options.verboseOnly && !verbose) return;
+    const channelId = SelectedChannelStore.getVoiceChannelId();
+    if (!channelId || (options.userId && !currentVoiceMembers().includes(options.userId))) return;
+    if (noticeChannelId !== channelId) clearNotices();
+    noticeChannelId = channelId;
+    const body = verbose && options.details ? `${message} ${options.details}` : message;
+    const now = Date.now();
+    const key = options.userId ?? "guard";
+    noticeItems = [...noticeItems.filter(item => item.key !== key && now - item.at < NOTICE_LIFETIME_MS),
+        { key, body, warning: !!options.warning, at: now }].slice(-3);
+    publishNotices();
+    scheduleNoticeExpiry();
+    void persistNotification({ title: "MicSpamGuard", body, color: options.warning ? "#f9e2af" : "#a6e3a1" });
 }
 
 function formatDuration(seconds: number) {
@@ -282,7 +379,7 @@ function toPercent(level: number) {
     return Math.max(0, Math.min(100, Math.round(((db - LEVEL_FLOOR_DB) / -LEVEL_FLOOR_DB) * 100)));
 }
 
-function readInbound(payload: any): InboundSample[] {
+function readInbound(payload: VoiceStats): InboundSample[] {
     const inbound = payload?.rtp?.inbound;
     if (!inbound || typeof inbound !== "object") return [];
 
@@ -292,7 +389,7 @@ function readInbound(payload: any): InboundSample[] {
         const entries = Array.isArray(value) ? value : [value];
         for (const value of entries) {
             if (!value || typeof value !== "object") continue;
-            const entry = value as Record<string, any>;
+            const entry = value as Record<string, unknown>;
             if (entry.type === "outbound-rtp" || entry.direction === "outbound") continue;
             if ([entry.userId, entry.user_id].some(id => id != null && (typeof id !== "string" || id.length === 0))) continue;
             const keyed = typeof key === "string" && members.has(key) ? key : null;
@@ -326,12 +423,12 @@ function readInbound(payload: any): InboundSample[] {
 }
 
 function otherGuardHolds(userId: string): boolean {
-    return Boolean((plugins.StereoGuard as any)?.isHolding?.(userId));
+    return Boolean((plugins.StereoGuard as { isHolding?: (id: string) => boolean; })?.isHolding?.(userId));
 }
 
 function heldBaseline(userId: string): number {
-    const other = (plugins.StereoGuard as any)?.getHeldBaseline?.(userId);
-    return Number.isFinite(other) && other >= 0 ? other : MediaEngineStore.getLocalVolume(userId);
+    const other = (plugins.StereoGuard as { getHeldBaseline?: (id: string) => number; })?.getHeldBaseline?.(userId);
+    return typeof other === "number" && Number.isFinite(other) && other >= 0 ? other : MediaEngineStore.getLocalVolume(userId);
 }
 
 function updateProtection(now: number) {
@@ -362,15 +459,17 @@ function mute(userId: string, level: number) {
     const base = heldBaseline(userId);
     if (!Number.isFinite(base) || base <= 0) return;
     savedVolume.set(userId, base);
-    volumeHolds.set(userId, new VolumeHold(base, Date.now(), 2000));
+    volumeHolds.set(userId, new VolumeHold(100, Date.now(), 2000, true));
     setLocalVolume(userId, 0);
     mutedByUs.set(userId, Date.now());
     persistHeld();
     logger.debug(`muted ${userId} at ${level}%`);
 
-    if (settings.store.notify) {
-        showToast(`MicSpamGuard muted ${displayName(userId)} at ${level}% volume.`, Toasts.Type.MESSAGE);
-    }
+    notifyAction(`Muted ${displayName(userId)} for extreme loudness.`, {
+        warning: true,
+        userId,
+        details: `Level ${level}%. ${settings.store.autoUnmute > 0 ? "Volume will return to 100% after the quiet interval." : "Auto restore is off; restore manually."}`
+    });
 }
 
 function unmute(userId: string, mode: "manual" | "auto" | "silent") {
@@ -379,22 +478,26 @@ function unmute(userId: string, mode: "manual" | "auto" | "silent") {
     const hold = volumeHolds.get(userId);
     volumeHolds.delete(userId);
     if (!otherGuardHolds(userId) && (!hold || Math.abs(MediaEngineStore.getLocalVolume(userId) - hold.applied) < 0.5)) {
-        setLocalVolume(userId, savedVolume.get(userId) ?? 100);
+        setLocalVolume(userId, mode === "auto" ? 100 : savedVolume.get(userId) ?? 100);
     }
     savedVolume.delete(userId);
     persistHeld();
 
     if (mode === "silent" || !settings.store.notify) return;
 
-    showToast(
-        mode === "auto"
-            ? `MicSpamGuard auto-unmuted ${displayName(userId)} after ${formatDuration(settings.store.autoUnmute)}.`
-            : `MicSpamGuard unmuted ${displayName(userId)}.`,
-        Toasts.Type.MESSAGE
-    );
+    if (otherGuardHolds(userId)) {
+        notifyAction(`Released MicSpamGuard's hold on ${displayName(userId)}. StereoGuard still controls their volume.`, { warning: true, userId });
+        return;
+    }
+    notifyAction(mode === "auto"
+        ? `Restored ${displayName(userId)} to 100%.`
+        : `Unmuted ${displayName(userId)}.`, {
+        userId,
+        details: mode === "auto" ? `After ${formatDuration(settings.store.autoUnmute)} without loud audio.` : undefined
+    });
 }
 
-function restoreVolume(userId: string, mode: "manual" | "silent") {
+function restoreVolume(userId: string, mode: "manual" | "auto" | "silent") {
     const entry = turnedDown.get(userId);
     if (!entry || !turnedDown.delete(userId)) return;
 
@@ -407,7 +510,7 @@ function restoreVolume(userId: string, mode: "manual" | "silent") {
 
     if (mode === "silent" || !settings.store.notify) return;
 
-    showToast(`MicSpamGuard restored ${displayName(userId)}'s volume.`, Toasts.Type.MESSAGE);
+    notifyAction(`Restored ${displayName(userId)} to ${Math.round(amplitudeToVolume(entry.base))}%.`, { userId, verboseOnly: mode === "auto", details: "Automatic balancing ended after quiet audio." });
 }
 
 function restoreAll(mode: "manual" | "silent") {
@@ -452,16 +555,27 @@ function updateDynamics(now: number) {
         entry.at = now;
 
         const applied = Math.round(entry.volume * 10) / 10;
-        if (applied !== entry.applied) {
+        const deadband = Math.max(0.5, Math.abs(entry.applied) * VOLUME_DEADBAND);
+        if (Math.abs(applied - entry.applied) >= deadband) {
             entry.applied = applied;
             setLocalVolume(userId, applied);
+            const slider = Math.round(amplitudeToVolume(applied));
+            const baseline = amplitudeToVolume(entry.base);
+            const direction = slider < baseline - 5 ? -1 : slider > baseline + 5 ? 1 : 0;
+            if (direction && (entry.noticeAt === undefined || now - entry.noticeAt >= 10000)
+                && (entry.noticeDirection !== direction || Math.abs(slider - (entry.noticeVolume ?? baseline)) >= 20)) {
+                notifyAction(`${direction < 0 ? "Turned down" : "Raised"} ${displayName(userId)} to ${slider}%.`, { userId, warning: direction < 0, verboseOnly: true, details: "Balancing their incoming voice level." });
+                entry.noticeAt = now;
+                entry.noticeDirection = direction;
+                entry.noticeVolume = slider;
+            }
         }
 
-        if (now - entry.speechAt > SPEECH_HOLD_MS && Math.abs(entry.gainDb) < 0.05) restoreVolume(userId, "silent");
+        if (now - entry.speechAt > SPEECH_HOLD_MS && Math.abs(entry.gainDb) < 0.05) restoreVolume(userId, "auto");
     }
 }
 
-function onStats(payload: any) {
+function onStats(payload: VoiceStats) {
     const now = Date.now();
     const { enabled, sensitivity, dynamicUserVolume, autoMute } = settings.store;
     const threshold = Math.max(90, settings.store.threshold);
@@ -481,8 +595,7 @@ function onStats(payload: any) {
         levels.set(userId, percent);
         levelAt.set(userId, now);
 
-        // A zero reading while held can be post-volume silence. Require safe positive source audio.
-        if (amplitude > 0) volumeHolds.get(userId)?.observe(percent <= threshold - 10, now);
+        volumeHolds.get(userId)?.observe(percent <= threshold - 10, now);
 
         if (!enabled) continue;
 
@@ -535,6 +648,7 @@ function onStats(payload: any) {
 function bindConnection(conn: VoiceConnection | null) {
     if (conn === boundConnection) return;
 
+    clearNotices();
     boundConnection?.emitter?.off?.("stats", onStats);
     unmuteAll("silent");
     restoreAll("silent");
@@ -554,6 +668,7 @@ function poll() {
 
         const now = Date.now();
         const members = new Set(currentVoiceMembers());
+        if (noticeChannelId && noticeChannelId !== SelectedChannelStore.getVoiceChannelId()) clearNotices();
         for (const userId of [...volumeHolds.keys()]) {
             if (!members.has(userId) || isIgnored(userId) || isLocalMuted(userId)) unmute(userId, "silent");
         }
@@ -581,8 +696,11 @@ function poll() {
 }
 
 function persistHeld() {
-    const held = Object.fromEntries(savedVolume);
-    persistQueue = persistQueue.then(() => DataStore.set(HELD_KEY, held)).catch(e => logger.error("failed to save held volumes", e));
+    heldWrite ??= lodash.debounce(() => {
+        const held = Object.fromEntries(savedVolume);
+        persistQueue = persistQueue.then(() => DataStore.set(HELD_KEY, held)).catch(e => logger.error("failed to save held volumes", e));
+    }, PERSIST_DEBOUNCE_MS);
+    heldWrite();
 }
 
 async function saveIgnored() {
@@ -715,6 +833,8 @@ function MicSpamGuardButton({ iconForeground, hideTooltips, nameplate }: UserAre
     const { enabled } = settings.use(MIC_GUARD_KEYS);
 
     return (
+        <>
+        <GuardNotice />
         <UserAreaButton
             icon={<MicSpamGuardIcon className={iconForeground} />}
             tooltipText={hideTooltips ? void 0 : "Mic Spam Guard"}
@@ -727,31 +847,28 @@ function MicSpamGuardButton({ iconForeground, hideTooltips, nameplate }: UserAre
             onContextMenu={event => {
                 event.preventDefault();
                 settings.store.enabled = !enabled;
-                showToast(
-                    `Mic Spam Guard ${settings.store.enabled ? "enabled" : "disabled"}.`,
-                    Toasts.Type.MESSAGE
-                );
+                notifyAction(`MicSpamGuard ${settings.store.enabled ? "enabled" : "disabled"}.`);
             }}
         />
+        </>
     );
 }
 
 export default definePlugin({
     name: "MicSpamGuard",
     description: "Smoothly balances voice volumes and protects the call from sustained extreme loudness.",
-    authors: [{ name: "DavidHiFi", id: 1553713171938938891n }],
+    authors: [{ name: "Kurtzon Audio", id: 1552878708732469258n }, { name: "DavidHiFi", id: 1553713171938938891n }],
     tags: ["Voice", "Utility"],
-    enabledByDefault: true,
     settings,
     settingsAboutComponent: GuardPanel,
+
+    isHolding(userId: string) { return volumeHolds.has(userId); },
+    getHeldBaseline(userId: string) { return savedVolume.get(userId); },
 
     userAreaButton: {
         icon: MicSpamGuardIcon,
         render: MicSpamGuardButton
     },
-
-    isHolding(userId: string) { return volumeHolds.has(userId); },
-    getHeldBaseline(userId: string) { return savedVolume.get(userId); },
 
     async start() {
         try {
@@ -793,6 +910,7 @@ export default definePlugin({
     },
 
     stop() {
+        clearNotices();
         if (intervalId !== undefined) {
             clearInterval(intervalId);
             intervalId = undefined;
@@ -809,5 +927,6 @@ export default definePlugin({
         turnedDown.clear();
         levels.clear();
         levelAt.clear();
+        heldWrite?.flush();
     }
 });
