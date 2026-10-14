@@ -89,6 +89,9 @@ let autoWatchAllStreamsOnJoin = false;
 let autoWatchRetryTimeout: ReturnType<typeof setTimeout> | null = null;
 let autoWatchPollTimeout: ReturnType<typeof setTimeout> | null = null;
 let persistAutoWatchPreferencesTimeout: ReturnType<typeof setTimeout> | null = null;
+// True from the first change until its save lands. A reload in that window would read the
+// stored value, which is older than memory, and wipe the change.
+let autoWatchPreferencesDirty = false;
 
 export const renderedStreamScaleStore = proxyLazy(() => {
     const { Store } = Flux;
@@ -297,15 +300,20 @@ const persistAutoWatchPreferences = () => DataStore.set(autoWatchPreferencesStor
 } satisfies StoredAutoWatchPreferences);
 
 const schedulePersistAutoWatchPreferences = () => {
+    autoWatchPreferencesDirty = true;
     if (persistAutoWatchPreferencesTimeout != null) clearTimeout(persistAutoWatchPreferencesTimeout);
 
     persistAutoWatchPreferencesTimeout = setTimeout(() => {
         persistAutoWatchPreferencesTimeout = null;
-        void persistAutoWatchPreferences();
+        void persistAutoWatchPreferences().finally(() => {
+            if (persistAutoWatchPreferencesTimeout == null) autoWatchPreferencesDirty = false;
+        });
     }, persistAutoWatchPreferencesDelayMs);
 };
 
 export const loadAutoWatchPreferences = async () => {
+    if (autoWatchPreferencesDirty) return;
+
     const storedPreferences = await DataStore.get<StoredAutoWatchPreferences>(autoWatchPreferencesStoreKey);
     let savedAutoWatchUserIds: unknown = storedPreferences?.autoWatchUserIds;
     let savedAutoFocusUserIds: unknown = storedPreferences?.autoFocusUserIds;
@@ -353,6 +361,7 @@ export const setAutoFocusEnabledForUser = (userId: string, enabled: boolean) => 
 export const setAutoWatchAllStreamsOnJoinEnabled = (enabled: boolean) => {
     if (autoWatchAllStreamsOnJoin === enabled) return;
 
+    autoWatchAllStreamsOnJoin = enabled;
     renderedStreamScaleStore.updateAutoWatchAllStreamsOnJoin(enabled);
     schedulePersistAutoWatchPreferences();
 

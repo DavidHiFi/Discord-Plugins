@@ -20,6 +20,7 @@ import {
 } from "./components/GoLiveSettingsModal";
 import { ViewerControls } from "./components/ViewerControls";
 import { streamContextPatch, userContextPatch } from "./contextMenus";
+import { requestLocalPreview, setLocalPreviewChangeListener } from "./customPreviewImage";
 import {
     installMicrophoneInterceptor,
     prepareMicrophoneConstraints,
@@ -28,7 +29,8 @@ import {
     wrapMicrophoneStream
 } from "./microphone";
 import { streamEnhancerPatches } from "./patches";
-import { refreshCustomPreview, stopCustomPreviewLoader, streamEnhancerRuntime, streamEnhancerSettings } from "./settings";
+import { startPreviewSender, stopPreviewSender } from "./previewSender";
+import { getPreviewRefreshIntervalMs, getPreviewThumbnailDataUrl, refreshCustomPreview, shouldSpoofStreamPanelPreview, stopCustomPreviewLoader, streamEnhancerRuntime, streamEnhancerSettings } from "./settings";
 import * as streamState from "./state";
 import managedStyle from "./styles.css?managed";
 import type { StreamParticipant } from "./types";
@@ -62,13 +64,20 @@ const streamEnhancer = definePlugin({
     start() {
         installMicrophoneInterceptor();
         installOutgoingVideoFilterInterceptor();
-        refreshCustomPreview();
+        setLocalPreviewChangeListener(refreshCustomPreview);
+        requestLocalPreview();
+        startPreviewSender({
+            isEnabled: shouldSpoofStreamPanelPreview,
+            getThumbnail: getPreviewThumbnailDataUrl,
+            getIntervalMs: getPreviewRefreshIntervalMs
+        });
         streamState.startAutoWatch();
     },
     stop() {
         uninstallOutgoingVideoFilterInterceptor();
         uninstallMicrophoneInterceptor();
         stopCustomPreviewLoader();
+        stopPreviewSender();
         streamState.stopStreamEnhancerState();
     },
     isMediaParticipant: streamState.isMediaParticipant,

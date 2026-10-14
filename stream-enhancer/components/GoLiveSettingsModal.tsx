@@ -22,7 +22,6 @@ import {
     defaultStreamEnhancerConfig,
     getDefaultGoLiveSourceTypeValue,
     getSupportedStreamCodec,
-    isShittyMicMode,
     isStreamCodecAvailable,
     micChannelRoutingOptions,
     micPresetButtons,
@@ -55,13 +54,9 @@ const codecOptions = ["auto", "av1", "vp9", "h264"] as const;
 const fpsOptions = [10, 30, 60, 120, 240, 320] as const;
 const streamBitrateOptions = [12000, 24000, 50000, 110000] as const;
 const micBitrateOptions = [1, 2, 4, 8, 12, 16, 24, 32, 64, 96, 128, 256, 320] as const;
-const streamAudioBitrateOptions = [128, 192, 256, 320] as const;
 const hzMarkers = [16000, 48000, 96000, 192000] as const;
 const packetLossMarkers = [0, 2, 5, 10, 15, 20, 30] as const;
 const ptimeMarkers = [10, 20, 30, 40, 50, 60] as const;
-const dynamicFloorMarkers = [35, 45, 55, 65, 75, 85, 100] as const;
-const keyframeMarkers = [250, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000] as const;
-const telemetryMarkers = [1, 2, 3, 5, 10, 15, 30] as const;
 const previewScaleMarkers = [80, 90, 100, 110, 120, 140, 160] as const;
 const previewColorMarkers = [50, 75, 100, 125, 150, 175, 200] as const;
 const previewWidthMarkers = [640, 960, 1280, 1600, 1920, 2560, 3840] as const;
@@ -520,10 +515,6 @@ function GoLiveQuickPanel({ selectedAudioSourceId }: { selectedAudioSourceId?: s
                         </div>
                     </div>
                     <div className={cl("go-live-toggle-grid")}>
-                        <FormSwitch value={normalized.streamSingleLayer} onChange={value => setConfig({ streamSingleLayer: value })} title="Single high quality layer" />
-                        <FormSwitch value={normalized.streamAdaptiveMaxQuality} onChange={value => setConfig({ streamAdaptiveMaxQuality: value })} title="Adaptive max quality" />
-                        <FormSwitch value={normalized.streamSdpBoostEnabled} onChange={value => setConfig({ streamSdpBoostEnabled: value })} title="SDP bitrate boost" />
-                        <FormSwitch value={normalized.streamAudioStereo} onChange={value => setConfig({ streamAudioStereo: value })} title="Stereo stream audio" />
                         <FormSwitch value={normalized.streamHdrExperimentEnabled} onChange={value => setConfig({ streamHdrExperimentEnabled: value })} title="HDR Go Live experiment" />
                         <FormSwitch value={normalized.streamHdrCaptureMode} onChange={value => setConfig({ streamHdrCaptureMode: value })} title="HDR capture mode" />
                     </div>
@@ -615,9 +606,27 @@ function GoLiveQuickPanel({ selectedAudioSourceId }: { selectedAudioSourceId?: s
                             ))}
                         </div>
                     </div>
-                    {isShittyMicMode(normalized) && (
+                    {normalized.micTweaksEnabled && (
                         <>
                             <div className={cl("go-live-toggle-grid")}>
+                                <SliderField
+                                    label="Voice pitch"
+                                    value={normalized.micShittyPitchShiftPercent}
+                                    min={-50}
+                                    max={100}
+                                    markers={[-50, -35, -20, 0, 20, 50, 70, 100]}
+                                    formatter={value => `${value}%`}
+                                    onChange={value => { setConfig({ micShittyPitchShiftPercent: value }); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }}
+                                />
+                                <SliderField
+                                    label="Echo"
+                                    value={normalized.micShittyEchoPercent}
+                                    min={0}
+                                    max={100}
+                                    markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]}
+                                    formatter={value => `${value}%`}
+                                    onChange={value => { setConfig({ micShittyEchoPercent: value }); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }}
+                                />
                                 <SliderField
                                     label="Bad mic amplifier"
                                     value={normalized.micShittyVoiceBoostPercent}
@@ -655,7 +664,7 @@ function GoLiveQuickPanel({ selectedAudioSourceId }: { selectedAudioSourceId?: s
                                     onChange={value => { setConfig({ micShittyBitcrushPercent: value }); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }}
                                 />
                                 <SliderField
-                                    label="Bad mic flutter"
+                                    label="Robot ring mod"
                                     value={normalized.micShittyFlutterPercent}
                                     min={0}
                                     max={100}
@@ -756,37 +765,16 @@ function GoLiveQuickPanel({ selectedAudioSourceId }: { selectedAudioSourceId?: s
                     <div className={cl("go-live-advanced-grid")}>
                         <SettingsCard title="Stream Fine Tuning" subtitle="Dial in video behavior once your preset and resolution are set.">
                             <div className={cl("go-live-toggle-grid")}>
-                                <FormSwitch value={normalized.streamTweaksEnabled} onChange={value => setConfig({ streamTweaksEnabled: value })} title="Improve stream quality" />
-                                <FormSwitch value={normalized.dynamicBitrateFloorEnabled} onChange={value => setConfig({ dynamicBitrateFloorEnabled: value })} title="Keep bitrate from dropping too low" />
+                                <FormSwitch value={normalized.streamTweaksEnabled} onChange={value => setConfig({ streamTweaksEnabled: value })} title="Override FPS and resolution" />
                             </div>
                             <Divider />
-                            <SliderField label="Resolution quality" value={normalized.streamScalePercent} min={50} max={400} markers={[50, 75, 100, 125, 150, 200, 250, 300, 400]} onChange={value => setConfig({ streamScalePercent: value })} formatter={value => `${value}%`} />
+                            <SliderField label="Resolution scale" value={normalized.streamScalePercent} min={50} max={400} markers={[50, 75, 100, 125, 150, 200, 250, 300, 400]} onChange={value => setConfig({ streamScalePercent: value })} formatter={value => `${value}%`} />
                             <SliderField label="Minimum video bitrate" value={normalized.streamMinVideoBitrateKbps} min={250} max={120000} markers={streamBitrateOptions} onChange={value => setConfig({ streamMinVideoBitrateKbps: value })} formatter={value => `${compactMarker(value)} kbps`} />
-                            <SliderField label="Dynamic floor strength" value={normalized.dynamicBitrateFloorPercent} min={35} max={100} markers={dynamicFloorMarkers} onChange={value => setConfig({ dynamicBitrateFloorPercent: value })} formatter={value => `${value}%`} />
-                            <SliderField label="Keyframe interval" value={normalized.streamKeyframeIntervalMs} min={250} max={5000} markers={keyframeMarkers} onChange={value => setConfig({ streamKeyframeIntervalMs: value })} formatter={value => `${value} ms`} />
-                            <SliderField label="SDP start bitrate" value={normalized.streamSdpStartBitrateKbps} min={500} max={120000} markers={[500, 2000, 5000, 20000, 50000, 120000]} onChange={value => setConfig({ streamSdpStartBitrateKbps: value })} formatter={value => `${compactMarker(value)} kbps`} />
                         </SettingsCard>
 
-                        <SettingsCard title="Stream Audio And Telemetry" subtitle="Keep outgoing stream audio and visibility controls together.">
-                            <div className={cl("go-live-pill-row")}>
-                                {streamAudioBitrateOptions.map(value => (
-                                    <QuickPillButton
-                                        key={value}
-                                        active={normalized.streamAudioBitrateKbps === value}
-                                        label={`${value} kbps`}
-                                        onClick={() => setConfig({ streamAudioBitrateKbps: value })}
-                                    />
-                                ))}
-                            </div>
-                            <Divider />
-                            <SliderField label="Audio max playback rate" value={normalized.streamAudioMaxPlaybackRate} min={8000} max={192000} markers={hzMarkers} onChange={value => setConfig({ streamAudioMaxPlaybackRate: value })} formatter={value => `${hzMarker(value)} Hz`} />
-                            <SliderField label="Audio packet loss protection" value={normalized.streamAudioPacketLossPercent} min={0} max={30} markers={packetLossMarkers} onChange={value => setConfig({ streamAudioPacketLossPercent: value })} formatter={value => `${value}%`} />
-                            <SliderField label="Telemetry interval" value={normalized.streamTelemetryIntervalSec} min={1} max={30} markers={telemetryMarkers} onChange={value => setConfig({ streamTelemetryIntervalSec: value })} formatter={value => `${value}s`} />
+                        <SettingsCard title="Stream Network" subtitle="Discord's own network switches for streams.">
                             <div className={cl("go-live-toggle-grid")}>
-                                <FormSwitch value={normalized.streamAudioFec} onChange={value => setConfig({ streamAudioFec: value })} title="Stream audio forward error correction" />
-                                <FormSwitch value={normalized.streamAudioDtx} onChange={value => setConfig({ streamAudioDtx: value })} title="Stream audio silence compression" />
                                 <FormSwitch value={qosEnabled} onChange={value => audioSettingsActionCreators.setQoS?.(value)} title="QoS packets" />
-                                <FormSwitch value={normalized.streamTelemetryEnabled} onChange={value => setConfig({ streamTelemetryEnabled: value })} title="Show outgoing stream stats" />
                             </div>
                         </SettingsCard>
 

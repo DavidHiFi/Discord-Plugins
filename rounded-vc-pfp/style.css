@@ -10,12 +10,30 @@ div[class*="videoWrapper"] {
     overflow: hidden !important;
 }
 
+/* The picture is painted and masked on ::before so this element can carry the
+   glow filter unmasked. A filter on the backdrop wrapper would also trace
+   whatever that wrapper paints, like a profile gradient. Avoid :has() here, the
+   managed sheet can drop those rules at boot. */
 div[data-selenium-video-tile] div[role="img"] {
+    position: relative;
     width: 100% !important;
     height: 100% !important;
+    background: none !important;
+    filter: var(--vc-pfp-glow-filter, none) !important;
+    transition: filter 250ms ease;
+
+    > * {
+        display: none;
+    }
+}
+
+div[data-selenium-video-tile] div[role="img"]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
     background: center / contain no-repeat;
     background-image: var(--full-res-avatar);
-    transform: scale(var(--vc-pfp-zoom, 1)) !important;
+    transform: scale(var(--vc-pfp-zoom, 1));
     -webkit-mask-image: var(--vc-pfp-avatar-mask, url("data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Crect%20width='100'%20height='100'%20rx='5'%20fill='%23fff'/%3E%3C/svg%3E"));
     -webkit-mask-repeat: no-repeat;
     -webkit-mask-position: center;
@@ -24,61 +42,36 @@ div[data-selenium-video-tile] div[role="img"] {
     mask-repeat: no-repeat;
     mask-position: center;
     mask-size: contain;
-
-    > * {
-        display: none;
-    }
 }
 
-/* The doubled [role="img"] raises specificity above FullVCPFP's
-   `border-radius: unset !important`, so the rounding wins even when
-   both plugins are enabled. */
+/* The doubled [role="img"] beats FullVCPFP's `border-radius: unset !important` */
 div[data-selenium-video-tile] div[role="img"][role="img"] {
     border-radius: var(--vc-pfp-avatar-radius, 5%) !important;
 }
 
-/* The hide-background switch also kills the per-user colored backdrop that
-   lights up behind focused tiles; the marker var is set inline on the tile
-   root by the patch, and generic matches inside one tile would otherwise be
-   a mangled class name. */
+/* The hide-background switch also hides the per-user backdrop behind focused tiles */
 div[data-selenium-video-tile][style*="--vc-pfp-hide-bg"] [class*="background"] {
-    background: none !important; /* user's hide-background switch */
+    background: none !important;
 }
 
-/* The glow paints through the filter var the plugin emits, independently of
-    the background switch: it wraps the picture over the box or banner too.
-    The content backdrop wrapper exists only on picture tiles, which is what
-    scopes the rule to them. Selectors stay :has()-free on purpose: the
-    composed managed sheet can silently drop :has() rules from its parsed
-    cascade at boot (measured 2026-10-08 evening), while plain attribute and
-    descendant selectors survive every compose. */
-div[data-selenium-video-tile] div[class*="background"] {
-    filter: var(--vc-pfp-glow-filter, none) !important; /* the glow var is set per tile by the plugin */
-    transition: filter 250ms ease; /* the speaking ring fades instead of popping */
+/* Box mode and camera tiles ring the tile box while speaking. Picture mode
+   rings the picture through the filter above instead, and stream video never
+   carries the marker. No transition: fading a blurred shadow repaints it every
+   frame. */
+div[data-selenium-video-tile][style*="--vc-pfp-speaking"]:not([style*="--vc-pfp-ring-pic"]) {
+    box-shadow: 0 0 0 2px var(--green-360, #23a55a), 0 0 16px 3px rgb(35 165 90 / 50%) !important;
 }
 
-/* Speaking indicator moved onto the picture: the green glow rides the same
-   filter string as the user glow (the patch composes both layers while the
-   user speaks), and the drop-shadow trails the masked picture outline, which
-   a box-shadow on the masked element itself could never do - the mask square
-   is centered inside the element box, so any shadow on that element would
-   clip wrong. */
-
-/* Camera tiles have no picture box for the bloom to wrap, so they keep
-   Discord's own tile border; the --vc-pfp-camera marker exempts them here. */
+/* Camera tiles have no picture, so they keep Discord's own tile border */
 div[data-selenium-video-tile][style*="--vc-pfp-ring-pic"]:not([style*="--vc-pfp-camera"]) [class*="border__"] {
-    display: none !important; /* speaking indicator switched to the picture */
+    display: none !important;
 }
 
-/* The halo must keep fading outside the tile box or it gets a hard straight
-   cut where the old box ended (this level and the content level below both
-   clip). Camera and stream tiles carry the marker too; their corners stay
-   rounded through the video's own border-radius, so releasing overflow is
-   safe for them. */
+/* Let the halo fade past the tile box instead of cutting off at its edge */
 div[data-selenium-video-tile][style*="--vc-pfp-hide-bg"] {
-    overflow: visible !important; /* halo past the tile box */
+    overflow: visible !important;
 }
 
 div[data-selenium-video-tile][style*="--vc-pfp-hide-bg"] [class*="content"] {
-    overflow: visible !important; /* one more clip level above the wrapper */
+    overflow: visible !important;
 }

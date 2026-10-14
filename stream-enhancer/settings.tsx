@@ -21,7 +21,10 @@ import { FluxDispatcher, Select, Slider, TextInput, Toasts, useEffect, useLayout
 import type { ReactNode } from "react";
 
 import { advertiseBadge, badgeFps, badgeFpsPresets, badgeResolution, badgeResolutionPresets, maxBadgeFps, maxBadgeHeight, normalizeBadgeConfig, sanitizeBadgeVisibility } from "./badge";
+import { clearLocalPreview, getLocalPreviewUrl, requestLocalPreview, saveLocalPreview } from "./customPreviewImage";
+import { isMicEffectActive, type MicEffectSettings } from "./micEffects";
 import { installMicrophoneInterceptor, syncLiveMicrophoneEffects } from "./microphone";
+import { previewCoverChanged } from "./previewSender";
 import { badgeSize, choiceAt, nearestChoice, showChoiceLabel, sliderChoices } from "./slider";
 
 export type StreamCodec = "auto" | "av1" | "vp9" | "h264";
@@ -212,6 +215,7 @@ export const defaultStreamEnhancerConfig = {
     micShittyDropoutPercent: 0,
     micShittyClippingPercent: 0,
     micShittyPitchShiftPercent: 0,
+    micShittyEchoPercent: 0,
     micShittyHardCutout: false,
     micOpusComplexity: 10,
     micPacketLossPercent: 1,
@@ -223,25 +227,12 @@ export const defaultStreamEnhancerConfig = {
     streamTweaksEnabled: true,
     streamVideoBitrateKbps: 24000,
     streamMinVideoBitrateKbps: 12000,
-    streamAudioBitrateKbps: 192,
-    streamAudioStereo: true,
-    streamAudioDtx: false,
-    streamAudioFec: true,
-    streamAudioMaxPlaybackRate: 48000,
-    streamAudioPacketLossPercent: 1,
     streamCodec: "auto",
-    streamSingleLayer: true,
-    streamKeyframeIntervalMs: 1000,
-    streamSdpBoostEnabled: true,
-    streamSdpStartBitrateKbps: 24000,
-    streamAdaptiveMaxQuality: false,
     streamHdrExperimentEnabled: false,
     streamHdrCaptureMode: false,
     goLiveOpenStreamEnhancerByDefault: false,
     goLiveOpenEntireScreenByDefault: false,
     goLiveOpenCameraByDefault: false,
-    dynamicBitrateFloorEnabled: true,
-    dynamicBitrateFloorPercent: 72,
     streamMaxFps: 60,
     streamWidth: 1280,
     streamHeight: 720,
@@ -254,16 +245,15 @@ export const defaultStreamEnhancerConfig = {
     previewUploadWidth: 1920,
     previewUploadHeight: 1080,
     previewJpegQualityPercent: 92,
-    previewRefreshIntervalSec: 30,
-    previewRetryIntervalSec: 5,
+    previewRefreshIntervalSec: 60,
+    previewRetryIntervalSec: 15,
     previewUploadFilterEnabled: false,
     previewUploadFilterContrastPercent: 112,
     customPreviewUrl: "",
+    customPreviewFileName: "",
     previewStretchFill: true,
     previewFlipX: false,
     previewFlipY: false,
-    streamTelemetryEnabled: true,
-    streamTelemetryIntervalSec: 5,
     viewerResizeSliderEnabled: false,
     outgoingVideoFilterEnabled: true,
 };
@@ -276,7 +266,7 @@ const mediaEngineStore = findStoreLazy("MediaEngineStore") as MediaEngineStoreLi
 const goLiveSourceStore = findByPropsLazy("getGoLiveSource") as GoLiveSourceStoreLike;
 const goLiveActionCreators = findByPropsLazy("setGoLiveSource") as GoLiveActionCreatorsLike;
 const liveMicActionCreators = findByPropsLazy("setAutomaticGainControl", "setEchoCancellation", "setInputVolume") as LiveMicActionCreatorsLike;
-const conflictingPlugins = ["BetterMicrophone", "BetterScreenshare", "LimitlessScreenshare", "CustomStreamQuality"] as const;
+const conflictingPlugins = ["BetterMicrophone", "BetterScreenshare", "LimitlessScreenshare", "CustomStreamQuality", "CustomStreamPreview"] as const;
 const cl = classNameFactory("vc-stream-enhancer-settings-");
 const coverCl = classNameFactory("vc-stream-enhancer-");
 const logger = new Logger("StreamEnhancer");
@@ -503,7 +493,8 @@ export function normalizeConfig(input: Partial<StreamEnhancerConfig> | undefined
         micShittyStaticPercent: clamp(Math.round(source.micShittyStaticPercent ?? defaultStreamEnhancerConfig.micShittyStaticPercent), 0, 100),
         micShittyDropoutPercent: clamp(Math.round(source.micShittyDropoutPercent ?? defaultStreamEnhancerConfig.micShittyDropoutPercent), 0, 100),
         micShittyClippingPercent: clamp(Math.round(source.micShittyClippingPercent ?? defaultStreamEnhancerConfig.micShittyClippingPercent), 0, 100),
-        micShittyPitchShiftPercent: clamp(Math.round(source.micShittyPitchShiftPercent ?? defaultStreamEnhancerConfig.micShittyPitchShiftPercent), 0, 100),
+        micShittyPitchShiftPercent: clamp(Math.round(source.micShittyPitchShiftPercent ?? defaultStreamEnhancerConfig.micShittyPitchShiftPercent), -50, 100),
+        micShittyEchoPercent: clamp(Math.round(source.micShittyEchoPercent ?? defaultStreamEnhancerConfig.micShittyEchoPercent), 0, 100),
         micShittyHardCutout: source.micShittyHardCutout ?? defaultStreamEnhancerConfig.micShittyHardCutout,
         micOpusComplexity: clamp(Math.round(source.micOpusComplexity ?? defaultStreamEnhancerConfig.micOpusComplexity), 0, 10),
         micPacketLossPercent: clamp(Math.round(source.micPacketLossPercent ?? defaultStreamEnhancerConfig.micPacketLossPercent), 0, 30),
@@ -515,18 +506,7 @@ export function normalizeConfig(input: Partial<StreamEnhancerConfig> | undefined
         streamTweaksEnabled: source.streamTweaksEnabled ?? defaultStreamEnhancerConfig.streamTweaksEnabled,
         streamVideoBitrateKbps: clamp(Math.round(source.streamVideoBitrateKbps ?? defaultStreamEnhancerConfig.streamVideoBitrateKbps), 250, 120000),
         streamMinVideoBitrateKbps: clamp(Math.round(source.streamMinVideoBitrateKbps ?? defaultStreamEnhancerConfig.streamMinVideoBitrateKbps), 250, 120000),
-        streamAudioBitrateKbps: clamp(Math.round(source.streamAudioBitrateKbps ?? defaultStreamEnhancerConfig.streamAudioBitrateKbps), 24, 320),
-        streamAudioStereo: source.streamAudioStereo ?? defaultStreamEnhancerConfig.streamAudioStereo,
-        streamAudioDtx: source.streamAudioDtx ?? defaultStreamEnhancerConfig.streamAudioDtx,
-        streamAudioFec: source.streamAudioFec ?? defaultStreamEnhancerConfig.streamAudioFec,
-        streamAudioMaxPlaybackRate: clamp(Math.round(source.streamAudioMaxPlaybackRate ?? defaultStreamEnhancerConfig.streamAudioMaxPlaybackRate), 8000, 192000),
-        streamAudioPacketLossPercent: clamp(Math.round(source.streamAudioPacketLossPercent ?? defaultStreamEnhancerConfig.streamAudioPacketLossPercent), 0, 30),
         streamCodec: sanitizeCodec(source.streamCodec ?? defaultStreamEnhancerConfig.streamCodec),
-        streamSingleLayer: source.streamSingleLayer ?? defaultStreamEnhancerConfig.streamSingleLayer,
-        streamKeyframeIntervalMs: clamp(Math.round(source.streamKeyframeIntervalMs ?? defaultStreamEnhancerConfig.streamKeyframeIntervalMs), 250, 5000),
-        streamSdpBoostEnabled: source.streamSdpBoostEnabled ?? defaultStreamEnhancerConfig.streamSdpBoostEnabled,
-        streamSdpStartBitrateKbps: clamp(Math.round(source.streamSdpStartBitrateKbps ?? defaultStreamEnhancerConfig.streamSdpStartBitrateKbps), 500, 120000),
-        streamAdaptiveMaxQuality: source.streamAdaptiveMaxQuality ?? defaultStreamEnhancerConfig.streamAdaptiveMaxQuality,
         streamHdrExperimentEnabled: source.streamHdrExperimentEnabled ?? defaultStreamEnhancerConfig.streamHdrExperimentEnabled,
         streamHdrCaptureMode: source.streamHdrCaptureMode ?? defaultStreamEnhancerConfig.streamHdrCaptureMode,
         goLiveOpenStreamEnhancerByDefault: source.goLiveOpenStreamEnhancerByDefault ?? defaultStreamEnhancerConfig.goLiveOpenStreamEnhancerByDefault,
@@ -538,8 +518,6 @@ export function normalizeConfig(input: Partial<StreamEnhancerConfig> | undefined
             : (source.goLiveOpenEntireScreenByDefault ?? defaultStreamEnhancerConfig.goLiveOpenEntireScreenByDefault)
             ? false
             : source.goLiveOpenCameraByDefault ?? defaultStreamEnhancerConfig.goLiveOpenCameraByDefault,
-        dynamicBitrateFloorEnabled: source.dynamicBitrateFloorEnabled ?? defaultStreamEnhancerConfig.dynamicBitrateFloorEnabled,
-        dynamicBitrateFloorPercent: clamp(Math.round(source.dynamicBitrateFloorPercent ?? defaultStreamEnhancerConfig.dynamicBitrateFloorPercent), 35, 100),
         streamMaxFps: clamp(Math.round(source.streamMaxFps ?? defaultStreamEnhancerConfig.streamMaxFps), minStreamFps, maxStreamFps),
         streamWidth: clamp(Math.round(source.streamWidth ?? defaultStreamEnhancerConfig.streamWidth), minStreamWidth, maxStreamWidth),
         streamHeight: clamp(Math.round(source.streamHeight ?? defaultStreamEnhancerConfig.streamHeight), minStreamHeight, maxStreamHeight),
@@ -557,11 +535,10 @@ export function normalizeConfig(input: Partial<StreamEnhancerConfig> | undefined
         previewUploadFilterEnabled: source.previewUploadFilterEnabled ?? defaultStreamEnhancerConfig.previewUploadFilterEnabled,
         previewUploadFilterContrastPercent: clamp(Math.round(source.previewUploadFilterContrastPercent ?? defaultStreamEnhancerConfig.previewUploadFilterContrastPercent), 50, 200),
         customPreviewUrl: sanitizePreviewUrl(source.customPreviewUrl ?? defaultStreamEnhancerConfig.customPreviewUrl),
+        customPreviewFileName: typeof source.customPreviewFileName === "string" ? source.customPreviewFileName : "",
         previewStretchFill: source.previewStretchFill ?? defaultStreamEnhancerConfig.previewStretchFill,
         previewFlipX: source.previewFlipX ?? defaultStreamEnhancerConfig.previewFlipX,
         previewFlipY: source.previewFlipY ?? defaultStreamEnhancerConfig.previewFlipY,
-        streamTelemetryEnabled: source.streamTelemetryEnabled ?? defaultStreamEnhancerConfig.streamTelemetryEnabled,
-        streamTelemetryIntervalSec: clamp(Math.round(source.streamTelemetryIntervalSec ?? defaultStreamEnhancerConfig.streamTelemetryIntervalSec), 1, 30),
         viewerResizeSliderEnabled: source.viewerResizeSliderEnabled ?? false,
         outgoingVideoFilterEnabled: source.outgoingVideoFilterEnabled ?? defaultStreamEnhancerConfig.outgoingVideoFilterEnabled
     };
@@ -573,121 +550,56 @@ export function applyStreamPreset(config: StreamEnhancerConfig, preset: StreamQu
             return normalizeConfig({
                 ...config,
                 streamCodec: "auto",
-                streamSingleLayer: true,
                 streamVideoBitrateKbps: 24000,
                 streamMinVideoBitrateKbps: 12000,
-                streamAudioBitrateKbps: 192,
-                streamAudioStereo: true,
-                streamAudioDtx: false,
-                streamAudioFec: true,
-                streamAudioMaxPlaybackRate: 48000,
-                streamAudioPacketLossPercent: 1,
                 streamMaxFps: 60,
                 streamWidth: 1280,
                 streamHeight: 720,
                 streamScalePercent: 100,
-                streamKeyframeIntervalMs: 1000,
-                streamSdpBoostEnabled: true,
-                streamSdpStartBitrateKbps: 24000,
-                streamAdaptiveMaxQuality: false,
-                dynamicBitrateFloorEnabled: true,
-                dynamicBitrateFloorPercent: 72
             });
         case "balanced":
             return normalizeConfig({
                 ...config,
                 streamCodec: "auto",
-                streamSingleLayer: true,
                 streamVideoBitrateKbps: 18000,
                 streamMinVideoBitrateKbps: 9000,
-                streamAudioBitrateKbps: 192,
-                streamAudioStereo: true,
-                streamAudioDtx: false,
-                streamAudioFec: true,
-                streamAudioMaxPlaybackRate: 48000,
-                streamAudioPacketLossPercent: 1,
                 streamMaxFps: 60,
                 streamWidth: 1920,
                 streamHeight: 1080,
                 streamScalePercent: 100,
-                streamKeyframeIntervalMs: 1000,
-                streamSdpBoostEnabled: true,
-                streamSdpStartBitrateKbps: 12000,
-                streamAdaptiveMaxQuality: false,
-                dynamicBitrateFloorEnabled: true,
-                dynamicBitrateFloorPercent: 65
             });
         case "maxDetail":
             return normalizeConfig({
                 ...config,
-                streamCodec: "av1",
-                streamSingleLayer: true,
+                streamCodec: getSupportedStreamCodec("av1"),
                 streamVideoBitrateKbps: 50000,
                 streamMinVideoBitrateKbps: 26000,
-                streamAudioBitrateKbps: 256,
-                streamAudioStereo: true,
-                streamAudioDtx: false,
-                streamAudioFec: true,
-                streamAudioMaxPlaybackRate: 96000,
-                streamAudioPacketLossPercent: 1,
                 streamMaxFps: 120,
                 streamWidth: 3840,
                 streamHeight: 2160,
                 streamScalePercent: 100,
-                streamKeyframeIntervalMs: 750,
-                streamSdpBoostEnabled: true,
-                streamSdpStartBitrateKbps: 28000,
-                streamAdaptiveMaxQuality: false,
-                dynamicBitrateFloorEnabled: true,
-                dynamicBitrateFloorPercent: 82
             });
         case "extreme":
             return normalizeConfig({
                 ...config,
-                streamCodec: "av1",
-                streamSingleLayer: true,
+                streamCodec: getSupportedStreamCodec("av1"),
                 streamVideoBitrateKbps: 110000,
                 streamMinVideoBitrateKbps: 70000,
-                streamAudioBitrateKbps: 320,
-                streamAudioStereo: true,
-                streamAudioDtx: false,
-                streamAudioFec: true,
-                streamAudioMaxPlaybackRate: 192000,
-                streamAudioPacketLossPercent: 0,
                 streamMaxFps: 240,
                 streamWidth: 7680,
                 streamHeight: 4320,
                 streamScalePercent: 100,
-                streamKeyframeIntervalMs: 500,
-                streamSdpBoostEnabled: true,
-                streamSdpStartBitrateKbps: 85000,
-                streamAdaptiveMaxQuality: false,
-                dynamicBitrateFloorEnabled: true,
-                dynamicBitrateFloorPercent: 92
             });
         case "adaptiveMax":
             return normalizeConfig({
                 ...config,
-                streamCodec: "av1",
-                streamSingleLayer: true,
+                streamCodec: getSupportedStreamCodec("av1"),
                 streamVideoBitrateKbps: 42000,
                 streamMinVideoBitrateKbps: 12000,
-                streamAudioBitrateKbps: 256,
-                streamAudioStereo: true,
-                streamAudioDtx: false,
-                streamAudioFec: true,
-                streamAudioMaxPlaybackRate: 96000,
-                streamAudioPacketLossPercent: 1,
                 streamMaxFps: 120,
                 streamWidth: 5120,
                 streamHeight: 2880,
                 streamScalePercent: 100,
-                streamKeyframeIntervalMs: 500,
-                streamSdpBoostEnabled: true,
-                streamSdpStartBitrateKbps: 26000,
-                streamAdaptiveMaxQuality: true,
-                dynamicBitrateFloorEnabled: true,
-                dynamicBitrateFloorPercent: 76
             });
     }
 }
@@ -905,193 +817,40 @@ export function applyMicPreset(config: StreamEnhancerConfig, preset: MicQualityP
     }
 }
 
+const noShittyMicEffects = {
+    micShittyVoiceBoostPercent: 0,
+    micShittyBassBoostPercent: 0,
+    micShittyBassResonancePercent: 0,
+    micShittyBitcrushPercent: 0,
+    micShittyFlutterPercent: 0,
+    micShittyMufflePercent: 0,
+    micShittyStaticPercent: 0,
+    micShittyDropoutPercent: 0,
+    micShittyClippingPercent: 0,
+    micShittyPitchShiftPercent: 0,
+    micShittyEchoPercent: 0,
+    micShittyHardCutout: false
+} satisfies Partial<StreamEnhancerConfig>;
+
+// Each preset sets its effect values and its transport (Opus bitrate, sample rate, packet time).
+// Effects run at any transport setting; the transport values only shape the encoded stream.
+const shittyMicEffectValues = {
+    none: {},
+    robot: { micBitrateKbps: 8, micSampleRate: 8000, micPtimeMs: 20, micShittyFlutterPercent: 80, micShittyBitcrushPercent: 50, micShittyClippingPercent: 30, micShittyVoiceBoostPercent: 25, micShittyMufflePercent: 15 },
+    deep: { micBitrateKbps: 3, micSampleRate: 8000, micPtimeMs: 40, micShittyPitchShiftPercent: -35, micShittyVoiceBoostPercent: 40, micShittyBassBoostPercent: 100, micShittyBassResonancePercent: 60, micShittyMufflePercent: 60 },
+    echo: { micBitrateKbps: 8, micSampleRate: 16000, micPtimeMs: 60, micShittyEchoPercent: 70, micShittyVoiceBoostPercent: 15, micShittyMufflePercent: 35, micShittyBitcrushPercent: 20 },
+    static: { micBitrateKbps: 2, micSampleRate: 8000, micPtimeMs: 60, micShittyStaticPercent: 100, micShittyDropoutPercent: 95, micShittyBitcrushPercent: 80, micShittyClippingPercent: 70, micShittyMufflePercent: 70, micShittyVoiceBoostPercent: 10, micShittyHardCutout: true },
+    demon: { micBitrateKbps: 2, micSampleRate: 8000, micPtimeMs: 45, micShittyPitchShiftPercent: -20, micShittyVoiceBoostPercent: 65, micShittyBassBoostPercent: 95, micShittyBassResonancePercent: 100, micShittyBitcrushPercent: 45, micShittyStaticPercent: 18, micShittyDropoutPercent: 20, micShittyClippingPercent: 100, micShittyMufflePercent: 85 },
+    telephone: { micBitrateKbps: 6, micSampleRate: 8000, micPtimeMs: 20, micShittyVoiceBoostPercent: 8, micShittyBitcrushPercent: 38, micShittyClippingPercent: 55, micShittyStaticPercent: 10, micShittyDropoutPercent: 4, micShittyMufflePercent: 82 },
+    underwater: { micBitrateKbps: 4, micSampleRate: 8000, micPtimeMs: 60, micShittyPitchShiftPercent: -10, micShittyVoiceBoostPercent: 18, micShittyBassBoostPercent: 35, micShittyBassResonancePercent: 35, micShittyEchoPercent: 30, micShittyMufflePercent: 92, micShittyBitcrushPercent: 20 },
+    glitch: { micBitrateKbps: 2, micSampleRate: 8000, micPtimeMs: 60, micShittyVoiceBoostPercent: 22, micShittyBassBoostPercent: 5, micShittyBassResonancePercent: 10, micShittyBitcrushPercent: 100, micShittyFlutterPercent: 30, micShittyMufflePercent: 48, micShittyStaticPercent: 52, micShittyDropoutPercent: 100, micShittyClippingPercent: 92, micShittyHardCutout: true },
+    bullhorn: { micBitrateKbps: 12, micSampleRate: 16000, micPtimeMs: 20, micShittyVoiceBoostPercent: 70, micShittyBitcrushPercent: 28, micShittyMufflePercent: 58, micShittyStaticPercent: 6, micShittyClippingPercent: 85 },
+    chipmunk: { micBitrateKbps: 64, micSampleRate: 48000, micPtimeMs: 20, micShittyPitchShiftPercent: 70, micShittyVoiceBoostPercent: 20 }
+} satisfies Record<ShittyMicEffectPreset, Partial<StreamEnhancerConfig>>;
+
 export function applyShittyMicEffectPreset(config: StreamEnhancerConfig, preset: ShittyMicEffectPreset): StreamEnhancerConfig {
     const base = applyMicPreset(config, "shittyMic");
-
-    switch (preset) {
-        case "none":
-            return base;
-        case "robot":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 8,
-                micSampleRate: 8000,
-                micShittyVoiceBoostPercent: 20,
-                micShittyBassBoostPercent: 0,
-                micShittyBassResonancePercent: 0,
-                micShittyBitcrushPercent: 100,
-                micShittyFlutterPercent: 10,
-                micShittyMufflePercent: 20,
-                micShittyStaticPercent: 8,
-                micShittyDropoutPercent: 15,
-                micShittyClippingPercent: 95,
-                micShittyPitchShiftPercent: 0,
-                micShittyHardCutout: false,
-                micPtimeMs: 20
-            });
-        case "deep":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 3,
-                micSampleRate: 8000,
-                micShittyVoiceBoostPercent: 55,
-                micShittyBassBoostPercent: 100,
-                micShittyBassResonancePercent: 90,
-                micShittyBitcrushPercent: 18,
-                micShittyFlutterPercent: 5,
-                micShittyMufflePercent: 78,
-                micShittyStaticPercent: 6,
-                micShittyDropoutPercent: 12,
-                micShittyClippingPercent: 88,
-                micShittyPitchShiftPercent: 0,
-                micShittyHardCutout: false,
-                micPtimeMs: 40
-            });
-        case "echo":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 8,
-                micSampleRate: 16000,
-                micShittyVoiceBoostPercent: 25,
-                micShittyBassBoostPercent: 10,
-                micShittyBassResonancePercent: 15,
-                micShittyBitcrushPercent: 22,
-                micShittyFlutterPercent: 75,
-                micShittyMufflePercent: 35,
-                micShittyStaticPercent: 15,
-                micShittyDropoutPercent: 10,
-                micShittyClippingPercent: 40,
-                micShittyPitchShiftPercent: 0,
-                micShittyHardCutout: false,
-                micPtimeMs: 60
-            });
-        case "static":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 2,
-                micSampleRate: 8000,
-                micShittyVoiceBoostPercent: 10,
-                micShittyBassBoostPercent: 0,
-                micShittyBassResonancePercent: 0,
-                micShittyBitcrushPercent: 80,
-                micShittyFlutterPercent: 35,
-                micShittyMufflePercent: 70,
-                micShittyStaticPercent: 100,
-                micShittyDropoutPercent: 95,
-                micShittyClippingPercent: 70,
-                micShittyPitchShiftPercent: 0,
-                micShittyHardCutout: true,
-                micPtimeMs: 60
-            });
-        case "demon":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 2,
-                micSampleRate: 8000,
-                micShittyVoiceBoostPercent: 65,
-                micShittyBassBoostPercent: 95,
-                micShittyBassResonancePercent: 100,
-                micShittyBitcrushPercent: 45,
-                micShittyFlutterPercent: 18,
-                micShittyMufflePercent: 85,
-                micShittyStaticPercent: 18,
-                micShittyDropoutPercent: 20,
-                micShittyClippingPercent: 100,
-                micShittyPitchShiftPercent: 0,
-                micShittyHardCutout: false,
-                micPtimeMs: 45
-            });
-        case "telephone":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 6,
-                micSampleRate: 8000,
-                micShittyVoiceBoostPercent: 8,
-                micShittyBassBoostPercent: 0,
-                micShittyBassResonancePercent: 0,
-                micShittyBitcrushPercent: 38,
-                micShittyFlutterPercent: 4,
-                micShittyMufflePercent: 82,
-                micShittyStaticPercent: 10,
-                micShittyDropoutPercent: 4,
-                micShittyClippingPercent: 55,
-                micShittyPitchShiftPercent: 0,
-                micShittyHardCutout: false,
-                micPtimeMs: 20
-            });
-        case "underwater":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 4,
-                micSampleRate: 8000,
-                micShittyVoiceBoostPercent: 18,
-                micShittyBassBoostPercent: 35,
-                micShittyBassResonancePercent: 35,
-                micShittyBitcrushPercent: 20,
-                micShittyFlutterPercent: 68,
-                micShittyMufflePercent: 92,
-                micShittyStaticPercent: 12,
-                micShittyDropoutPercent: 10,
-                micShittyClippingPercent: 30,
-                micShittyPitchShiftPercent: 0,
-                micShittyHardCutout: false,
-                micPtimeMs: 60
-            });
-        case "glitch":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 2,
-                micSampleRate: 8000,
-                micShittyVoiceBoostPercent: 22,
-                micShittyBassBoostPercent: 5,
-                micShittyBassResonancePercent: 10,
-                micShittyBitcrushPercent: 100,
-                micShittyFlutterPercent: 100,
-                micShittyMufflePercent: 48,
-                micShittyStaticPercent: 52,
-                micShittyDropoutPercent: 100,
-                micShittyClippingPercent: 92,
-                micShittyPitchShiftPercent: 0,
-                micShittyHardCutout: true,
-                micPtimeMs: 60
-            });
-        case "bullhorn":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 12,
-                micSampleRate: 16000,
-                micShittyVoiceBoostPercent: 70,
-                micShittyBassBoostPercent: 0,
-                micShittyBassResonancePercent: 0,
-                micShittyBitcrushPercent: 28,
-                micShittyFlutterPercent: 6,
-                micShittyMufflePercent: 58,
-                micShittyStaticPercent: 6,
-                micShittyDropoutPercent: 0,
-                micShittyClippingPercent: 85,
-                micShittyPitchShiftPercent: 0,
-                micShittyHardCutout: false,
-                micPtimeMs: 20
-            });
-        case "chipmunk":
-            return normalizeConfig({
-                ...base,
-                micBitrateKbps: 64,
-                micSampleRate: 48000,
-                micShittyVoiceBoostPercent: 40,
-                micShittyBassBoostPercent: 0,
-                micShittyBassResonancePercent: 0,
-                micShittyBitcrushPercent: 0,
-                micShittyFlutterPercent: 0,
-                micShittyMufflePercent: 0,
-                micShittyStaticPercent: 0,
-                micShittyDropoutPercent: 0,
-                micShittyClippingPercent: 0,
-                micShittyPitchShiftPercent: 100,
-                micShittyHardCutout: false,
-                micPtimeMs: 20
-            });
-    }
+    return normalizeConfig({ ...base, ...noShittyMicEffects, ...shittyMicEffectValues[preset] });
 }
 
 const syncLiveMicPresetSettings = (config: StreamEnhancerConfig, preset: MicQualityPreset) => {
@@ -1228,9 +987,25 @@ export const applyShittyMicEffectPresetAndSync = (config: StreamEnhancerConfig, 
     return next;
 };
 
-export const isShittyMicMode = (config: StreamEnhancerConfig) => {
-    return config.micTweaksEnabled && config.micSampleRate <= 8000 && config.micBitrateKbps <= 4;
-};
+const toMicEffectSettings = (config: StreamEnhancerConfig): MicEffectSettings => ({
+    pitchPercent: config.micShittyPitchShiftPercent,
+    echoPercent: config.micShittyEchoPercent,
+    ringPercent: config.micShittyFlutterPercent,
+    staticPercent: config.micShittyStaticPercent,
+    dropoutPercent: config.micShittyDropoutPercent,
+    bitcrushPercent: config.micShittyBitcrushPercent,
+    clippingPercent: config.micShittyClippingPercent,
+    voiceBoostPercent: config.micShittyVoiceBoostPercent,
+    hardCutout: config.micShittyHardCutout
+});
+
+// Bass, resonance and muffle also run on the effect path, so they count as effects.
+const hasMicEffects = (config: StreamEnhancerConfig) => isMicEffectActive(toMicEffectSettings(config))
+    || config.micShittyBassBoostPercent > 0
+    || config.micShittyBassResonancePercent > 0
+    || config.micShittyMufflePercent > 0;
+
+export const isShittyMicMode = (config: StreamEnhancerConfig) => config.micTweaksEnabled && hasMicEffects(config);
 
 function getActiveConflicts(): string[] {
     return conflictingPlugins.filter(name => isPluginEnabled(name));
@@ -1373,7 +1148,7 @@ export function StreamEnhancerControlPanel() {
             </ErrorCard>
 
             <SettingsSection title="Screenshare Quality">
-                <FormSwitch value={normalized.streamTweaksEnabled} onChange={value => set("streamTweaksEnabled", value)} title="Improve stream quality" />
+                <FormSwitch value={normalized.streamTweaksEnabled} onChange={value => set("streamTweaksEnabled", value)} title="Override FPS and resolution" />
                 <div className={cl("label")}>Quick preset</div>
                 <div className={cl("preset-row")}>
                     {streamPresetButtons.map(([preset, label]) => (
@@ -1398,9 +1173,6 @@ export function StreamEnhancerControlPanel() {
                     ))}
                 </div>
                 <Divider />
-                <FormSwitch value={normalized.streamSingleLayer} onChange={value => set("streamSingleLayer", value)} title="Prefer one high quality stream layer" />
-                <FormSwitch value={normalized.streamAdaptiveMaxQuality} onChange={value => set("streamAdaptiveMaxQuality", value)} title="Adaptive max quality" description="Keep quality high but back off faster on weaker connections." />
-                <FormSwitch value={normalized.dynamicBitrateFloorEnabled} onChange={value => set("dynamicBitrateFloorEnabled", value)} title="Keep bitrate from dropping too low" />
                 <FormSwitch value={normalized.streamHdrExperimentEnabled} onChange={value => set("streamHdrExperimentEnabled", value)} title="Enable HDR Go Live experiment" description="Forces Discord's 2026-02 Go Live HDR experiment into its HDR-enabled treatment." />
                 <FormSwitch value={normalized.streamHdrCaptureMode} onChange={value => set("streamHdrCaptureMode", value)} title="Use HDR capture mode" description="Passes Discord's HDR capture mode through to the native capture pipeline." />
                 <NumberEditor label="Max stream FPS" value={normalized.streamMaxFps} min={minStreamFps} max={maxStreamFps} markers={streamFpsMarkers} onChange={next => set("streamMaxFps", next)} />
@@ -1411,27 +1183,9 @@ export function StreamEnhancerControlPanel() {
                     select={value => applySelectedResolution(value, normalized)}
                     serialize={value => value}
                 />
-                <NumberEditor label="Resolution quality (%)" value={normalized.streamScalePercent} min={50} max={400} markers={[50, 75, 100, 125, 150, 200, 250, 300, 400]} onChange={next => set("streamScalePercent", next)} />
+                <NumberEditor label="Resolution scale (%)" value={normalized.streamScalePercent} min={50} max={400} markers={[50, 75, 100, 125, 150, 200, 250, 300, 400]} onChange={next => set("streamScalePercent", next)} />
                 <NumberEditor label="Video bitrate (kbps)" value={normalized.streamVideoBitrateKbps} min={250} max={120000} markers={[5000, 20000, 50000, 120000]} markerFormatter={compactMarker} onChange={next => set("streamVideoBitrateKbps", next)} />
                 <NumberEditor label="Minimum video bitrate (kbps)" value={normalized.streamMinVideoBitrateKbps} min={250} max={120000} markers={[5000, 20000, 50000, 120000]} markerFormatter={compactMarker} onChange={next => set("streamMinVideoBitrateKbps", next)} />
-                <NumberEditor label="Dynamic floor strength (%)" value={normalized.dynamicBitrateFloorPercent} min={35} max={100} markers={[35, 45, 55, 65, 75, 85, 100]} onChange={next => set("dynamicBitrateFloorPercent", next)} />
-                <NumberEditor label="Keyframe interval (ms)" value={normalized.streamKeyframeIntervalMs} min={250} max={5000} markers={[250, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000]} onChange={next => set("streamKeyframeIntervalMs", next)} />
-                <FormSwitch value={normalized.streamSdpBoostEnabled} onChange={value => set("streamSdpBoostEnabled", value)} title="SDP bitrate boost" />
-                <NumberEditor label="SDP start bitrate (kbps)" value={normalized.streamSdpStartBitrateKbps} min={500} max={120000} markers={[500, 2000, 5000, 20000, 50000, 120000]} markerFormatter={compactMarker} onChange={next => set("streamSdpStartBitrateKbps", next)} />
-                <Divider />
-                <Heading tag="h5" className={cl("section-subtitle")}>Stream audio</Heading>
-                <NumberEditor label="Stream audio bitrate (kbps)" value={normalized.streamAudioBitrateKbps} min={24} max={320} markers={[64, 96, 128, 160, 192, 256, 320]} onChange={next => set("streamAudioBitrateKbps", next)} />
-                <div className={cl("grid")}>
-                    <FormSwitch value={normalized.streamAudioStereo} onChange={value => set("streamAudioStereo", value)} title="Stereo stream audio" />
-                    <FormSwitch value={normalized.streamAudioFec} onChange={value => set("streamAudioFec", value)} title="Forward error correction" />
-                    <FormSwitch value={normalized.streamAudioDtx} onChange={value => set("streamAudioDtx", value)} title="Silence compression" />
-                </div>
-                <NumberEditor label="Stream audio max playback rate (Hz)" value={normalized.streamAudioMaxPlaybackRate} min={8000} max={192000} markers={[16000, 48000, 96000, 192000]} markerFormatter={hzMarker} onChange={next => set("streamAudioMaxPlaybackRate", next)} />
-                <NumberEditor label="Stream audio packet loss protection (%)" value={normalized.streamAudioPacketLossPercent} min={0} max={30} markers={[0, 2, 5, 10, 15, 20, 30]} onChange={next => set("streamAudioPacketLossPercent", next)} />
-                <Divider />
-                <Heading tag="h5" className={cl("section-subtitle")}>Telemetry</Heading>
-                <FormSwitch value={normalized.streamTelemetryEnabled} onChange={value => set("streamTelemetryEnabled", value)} title="Show outgoing and observed stream stats" />
-                <NumberEditor label="Telemetry interval (sec)" value={normalized.streamTelemetryIntervalSec} min={1} max={30} markers={[1, 2, 3, 5, 10, 15, 30]} onChange={next => set("streamTelemetryIntervalSec", next)} />
             </SettingsSection>
 
             <SettingsSection title="Microphone Quality">
@@ -1470,15 +1224,17 @@ export function StreamEnhancerControlPanel() {
                         </Button>
                     ))}
                 </div>
-                {isShittyMicMode(normalized) && (
+                {normalized.micTweaksEnabled && (
                     <>
                         <Divider />
                         <div className={cl("grid")}>
                             <NumberEditor label="Bad mic amplifier (%)" value={normalized.micShittyVoiceBoostPercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyVoiceBoostPercent", next); syncLiveMicrophoneEffects(); syncCurrentLiveMicConnections(); scheduleLiveMicrophoneRefresh(); }} />
+                            <NumberEditor label="Voice pitch (%)" value={normalized.micShittyPitchShiftPercent} min={-50} max={100} markers={[-50, -35, -20, 0, 20, 50, 70, 100]} onChange={next => { set("micShittyPitchShiftPercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
+                            <NumberEditor label="Echo (%)" value={normalized.micShittyEchoPercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyEchoPercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
                             <NumberEditor label="Bad mic bass boost (%)" value={normalized.micShittyBassBoostPercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyBassBoostPercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
                             <NumberEditor label="Bad mic bass resonance (%)" value={normalized.micShittyBassResonancePercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyBassResonancePercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
                             <NumberEditor label="Bad mic bitcrush (%)" value={normalized.micShittyBitcrushPercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyBitcrushPercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
-                            <NumberEditor label="Bad mic flutter (%)" value={normalized.micShittyFlutterPercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyFlutterPercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
+                            <NumberEditor label="Robot ring mod (%)" value={normalized.micShittyFlutterPercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyFlutterPercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
                             <NumberEditor label="Bad mic muffle (%)" value={normalized.micShittyMufflePercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyMufflePercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
                             <NumberEditor label="Bad mic static (%)" value={normalized.micShittyStaticPercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyStaticPercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
                             <NumberEditor label="Bad mic dropout (%)" value={normalized.micShittyDropoutPercent} min={0} max={100} markers={[0, 10, 20, 30, 40, 50, 60, 75, 100]} onChange={next => { set("micShittyDropoutPercent", next); syncLiveMicrophoneEffects(); scheduleLiveMicrophoneRefresh(); }} />
@@ -1535,10 +1291,13 @@ export function StreamEnhancerControlPanel() {
                 <NumberEditor label="Upload filter contrast (%)" value={normalized.previewUploadFilterContrastPercent} min={50} max={200} markers={[50, 75, 100, 125, 150, 175, 200]} onChange={next => set("previewUploadFilterContrastPercent", next)} />
                 <Button size="small" variant="secondary" onClick={forceRefreshStreamPreview}>Force Refresh Preview</Button>
                 <Divider />
-                <Heading tag="h5" className={cl("section-subtitle")}>Custom stream preview URL</Heading>
+                <Heading tag="h5" className={cl("section-subtitle")}>Custom stream preview image</Heading>
+                <div className={cl("note")}>{normalized.customPreviewFileName ? `Using file: ${normalized.customPreviewFileName}` : "No file chosen. The URL below is used if set."}</div>
+                <Button size="small" variant="secondary" onClick={() => chooseCustomPreviewFile(name => set("customPreviewFileName", name))}>Choose image file</Button>
+                <Button size="small" variant="secondary" onClick={() => clearChosenPreviewFile(() => set("customPreviewFileName", ""))}>Clear image file</Button>
                 <TextInput value={normalized.customPreviewUrl} placeholder="https://example.com/preview.png or data:image/..." onChange={value => set("customPreviewUrl", sanitizePreviewUrl(value))} />
                 <Button size="small" variant="secondary" onClick={() => set("customPreviewUrl", "")}>Clear Preview URL</Button>
-                <div className={cl("note")}>Changes apply live to outgoing media and stream previews.</div>
+                <div className={cl("note")}>A chosen file takes priority over the URL. Some image hosts block the cross-origin load a URL needs, so a file always works. Changes apply live to outgoing media and stream previews.</div>
             </SettingsSection>
 
             <SettingsSection title="Viewer Controls">
@@ -1616,7 +1375,8 @@ const getMicConfig = () => {
         builtInEchoCancellation: processing.builtInEchoCancellation,
         channelCount: config.micChannelCount,
         cleanGain: config.micGainPercent / 100,
-        degradeAudio: config.micBitrateKbps <= 16 && config.micSampleRate <= 8000,
+        effects: toMicEffectSettings(config),
+        effectsActive: config.micTweaksEnabled && hasMicEffects(config),
         echoCancellation: processing.echoCancellation,
         nativeKrisp: processing.nativeKrisp,
         nativeNoiseCancellation: processing.nativeNoiseCancellation,
@@ -1624,17 +1384,9 @@ const getMicConfig = () => {
         ptimeSeconds: clamp(Math.round(config.micPtimeMs), 10, 60) / 1000,
         routing: config.micChannelRouting,
         sampleRate: config.micSampleRate,
-        shittyBassBoostPercent: config.micShittyBassBoostPercent,
+        shittyBassBoostDb: config.micShittyBassBoostPercent / 4,
         shittyBassResonancePercent: config.micShittyBassResonancePercent,
-        shittyBitcrushPercent: config.micShittyBitcrushPercent,
-        shittyFlutterPercent: config.micShittyFlutterPercent,
-        shittyMufflePercent: config.micShittyMufflePercent,
-        shittyStaticPercent: config.micShittyStaticPercent,
-        shittyDropoutPercent: config.micShittyDropoutPercent,
-        shittyClippingPercent: config.micShittyClippingPercent,
-        shittyPitchShiftPercent: config.micShittyPitchShiftPercent,
-        shittyHardCutout: config.micShittyHardCutout,
-        shittyVoiceBoostPercent: config.micShittyVoiceBoostPercent,
+        shittyLowPassHz: 3600 - config.micShittyMufflePercent * 24,
         tweaksEnabled: config.micTweaksEnabled
     };
 };
@@ -1918,7 +1670,9 @@ export const getPreviewUploadHeight = () => clamp(Math.round(getConfig().preview
 
 export const getPreviewJpegQuality = () => clamp(getConfig().previewJpegQualityPercent / 100, 0.1, 1);
 
-export const getPreviewRefreshIntervalMs = () => clamp(Math.round(getConfig().previewRefreshIntervalSec), 5, 300) * 1000;
+// Floor of 30 s: Discord has not been shown to accept faster preview updates, and the stock
+// uploader uses this value too.
+export const getPreviewRefreshIntervalMs = () => clamp(Math.round(getConfig().previewRefreshIntervalSec), 30, 300) * 1000;
 
 export const getPreviewRetryIntervalMs = () => clamp(Math.round(getConfig().previewRetryIntervalSec), 3, 120) * 1000;
 
@@ -1941,9 +1695,19 @@ export const applyPreviewUploadFilter = (ctx: CanvasRenderingContext2D | null) =
 
 const getDataUrlBytes = (value: string) => Math.ceil((value.length - value.indexOf(",") - 1) * 3 / 4);
 
+const getCustomPreviewSource = (config: StreamEnhancerConfig) => {
+    if (!config.customPreviewFileName) return config.customPreviewUrl;
+
+    const localUrl = getLocalPreviewUrl();
+    if (localUrl) return localUrl;
+
+    requestLocalPreview();
+    return config.customPreviewUrl;
+};
+
 export const shouldSpoofStreamPanelPreview = () => {
     const config = getConfig();
-    return config.previewTweaksEnabled && !!config.customPreviewUrl;
+    return config.previewTweaksEnabled && !!getCustomPreviewSource(config);
 };
 
 const SpoofedStreamPanelPreview = ErrorBoundary.wrap(
@@ -2029,7 +1793,7 @@ export const isStreamSelectedInCallView = (value: unknown): boolean => {
 // watched stream plays for real.
 export const shouldGateStreamPanelVideo = (value: unknown) => {
     const config = getConfig();
-    if (!config.previewTweaksEnabled || !config.customPreviewUrl) return false;
+    if (!config.previewTweaksEnabled || !getCustomPreviewSource(config)) return false;
     return !isStreamSelectedInCallView(value);
 };
 
@@ -2039,7 +1803,7 @@ export const shouldGateStreamPanelVideo = (value: unknown) => {
 // Keeping the element non-null starved that hook and left tiles empty.
 export const renderSpoofedStreamPanelPreview = (stream: unknown) => {
     const config = getConfig();
-    if (!config.previewTweaksEnabled || !config.customPreviewUrl) return null;
+    if (!config.previewTweaksEnabled || !getCustomPreviewSource(config)) return null;
 
     const streamObj = unwrapStreamArg(stream);
     const active = applicationStreamingStore?.getActiveStreamForApplicationStream?.(streamObj) ?? null;
@@ -2049,13 +1813,16 @@ export const renderSpoofedStreamPanelPreview = (stream: unknown) => {
     // live video branch paints (see isStreamSelectedInCallView above).
     if (isStreamSelectedInCallView(streamObj)) return null;
 
-    const url = applicationStreamPreviewStore?.getPreviewURL?.(active.guildId, active.channelId, active.ownerId) ?? null;
+    const isOwnStream = active.ownerId === UserStore.getCurrentUser()?.id;
+    const url = (isOwnStream ? customPreviewCache.coverUrl : null)
+        ?? applicationStreamPreviewStore?.getPreviewURL?.(active.guildId, active.channelId, active.ownerId) ?? null;
     if (!url) return null;
 
     return <SpoofedStreamPanelPreview url={url} stretch={config.previewStretchFill} />;
 };
 
-const customPreviewCache: { url: string; key: string; canvas: HTMLCanvasElement | null; loading: boolean; } = { url: "", key: "", canvas: null, loading: false };
+const customPreviewCache: { url: string; key: string; canvas: HTMLCanvasElement | null; coverUrl: string | null; loading: boolean; } = { url: "", key: "", canvas: null, coverUrl: null, loading: false };
+let warnedPreviewUrl = "";
 let customPreviewUploadTrigger: unknown = null;
 let customPreviewRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -2071,6 +1838,7 @@ const triggerPreviewUpload = () => {
     try {
         (customPreviewUploadTrigger as (() => unknown) | null)?.();
     } catch { }
+    previewCoverChanged();
 };
 
 const previewFlipKey = (config: StreamEnhancerConfig) => `${config.previewFlipX ? "x" : ""}${config.previewFlipY ? "y" : ""}`;
@@ -2098,15 +1866,26 @@ const loadCustomPreviewImage = (url: string, key: string, config: StreamEnhancer
         // would letterbox on stock viewers instead of filling.
         ctx?.drawImage(image, 0, 0, canvas.width, canvas.height);
         customPreviewCache.canvas = canvas;
+        customPreviewCache.coverUrl = canvas.toDataURL("image/jpeg", 0.9);
         customPreviewCache.key = key;
         customPreviewCache.loading = false;
         triggerPreviewUpload();
     };
     image.onerror = () => {
         if (customPreviewCache.url !== url || customPreviewCache.key !== key) return;
-        logger.warn("Custom stream preview URL failed to load:", url);
+        logger.warn("Custom stream preview image failed to load:", url);
         customPreviewCache.canvas = null;
+        customPreviewCache.coverUrl = null;
         customPreviewCache.loading = false;
+        // Most hosts that block cross-origin image loads do so silently. Say so once per URL.
+        if (!url.startsWith("blob:") && !url.startsWith("data:") && warnedPreviewUrl !== url) {
+            warnedPreviewUrl = url;
+            Toasts.show({
+                id: Toasts.genId(),
+                message: "The preview image URL did not load. Its host may block cross-origin images; choose the image file instead.",
+                type: Toasts.Type.FAILURE
+            });
+        }
         if (customPreviewRetryTimer) clearTimeout(customPreviewRetryTimer);
         customPreviewRetryTimer = setTimeout(() => {
             customPreviewRetryTimer = null;
@@ -2118,13 +1897,15 @@ const loadCustomPreviewImage = (url: string, key: string, config: StreamEnhancer
 
 export const refreshCustomPreview = () => {
     const config = getConfig();
-    if (!config.previewTweaksEnabled || !config.customPreviewUrl) return;
+    const source = getCustomPreviewSource(config);
+    if (!config.previewTweaksEnabled || !source) return;
     const key = previewCacheKey(config);
-    if (customPreviewCache.url === config.customPreviewUrl && customPreviewCache.key === key && (customPreviewCache.canvas || customPreviewCache.loading)) return;
-    customPreviewCache.url = config.customPreviewUrl;
+    if (customPreviewCache.url === source && customPreviewCache.key === key && (customPreviewCache.canvas || customPreviewCache.loading)) return;
+    customPreviewCache.url = source;
     customPreviewCache.key = key;
     customPreviewCache.canvas = null;
-    loadCustomPreviewImage(config.customPreviewUrl, key, config);
+    customPreviewCache.coverUrl = null;
+    loadCustomPreviewImage(source, key, config);
 };
 
 export const stopCustomPreviewLoader = () => {
@@ -2135,7 +1916,7 @@ export const stopCustomPreviewLoader = () => {
     customPreviewCache.loading = false;
 };
 
-const previewReloadKeys = new Set(["customPreviewUrl", "previewTweaksEnabled", "previewStretchFill", "previewFlipX", "previewFlipY", "previewUploadWidth", "previewUploadHeight"]);
+const previewReloadKeys = new Set(["customPreviewUrl", "customPreviewFileName", "previewTweaksEnabled", "previewStretchFill", "previewFlipX", "previewFlipY", "previewUploadWidth", "previewUploadHeight"]);
 
 export const syncCustomPreviewForKey = (key: string) => {
     if (previewReloadKeys.has(key)) refreshCustomPreview();
@@ -2143,11 +1924,41 @@ export const syncCustomPreviewForKey = (key: string) => {
 
 const ensureCustomPreviewCanvas = () => {
     const config = getConfig();
-    if (!config.previewTweaksEnabled || !config.customPreviewUrl) return null;
+    if (!config.previewTweaksEnabled || !getCustomPreviewSource(config)) return null;
 
     refreshCustomPreview();
 
     return customPreviewCache.canvas;
+};
+
+// Encoded thumbnail for the direct sender, or null while the cover is still loading.
+export const getPreviewThumbnailDataUrl = () => {
+    if (!shouldSpoofStreamPanelPreview()) return null;
+    const canvas = ensureCustomPreviewCanvas();
+    return canvas ? getPreviewUploadDataUrl(canvas) : null;
+};
+
+export const chooseCustomPreviewFile = (onChosen: (name: string) => void) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        saveLocalPreview(file).then(() => onChosen(file.name), error => {
+            logger.warn("Could not save the preview image:", error);
+            Toasts.show({
+                id: Toasts.genId(),
+                message: error instanceof Error ? error.message : "Could not save the preview image.",
+                type: Toasts.Type.FAILURE
+            });
+        });
+    };
+    input.click();
+};
+
+export const clearChosenPreviewFile = (onCleared: () => void) => {
+    void clearLocalPreview().then(onCleared);
 };
 
 export const getPreviewUploadDataUrl = (canvas: HTMLCanvasElement) => {

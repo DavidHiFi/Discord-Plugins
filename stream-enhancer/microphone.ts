@@ -6,6 +6,7 @@
 
 import { filters, waitFor } from "@webpack";
 
+import { createMicEffectEngine, deriveMicEffectParams, isMicEffectActive } from "./micEffects";
 import { getMicrophoneRuntimeConfig } from "./settings";
 
 type ManagedMicrophoneStream = {
@@ -111,113 +112,58 @@ const connectMonoMix = (
     rightGain.connect(merger, 0, 1);
 };
 
-const createShittyMicCurve = () => {
-    const curve = new Float32Array(256);
+// Soft saturation with close to unity gain for quiet input. The earlier hard clamp to
+// +-0.015 turned the voice into a one-bit signal, so the envelope the effects depend on was gone.
+const createSoftClipCurve = () => {
+    const curve = new Float32Array(1024);
 
     for (let index = 0; index < curve.length; index++) {
         const sample = index / (curve.length - 1) * 2 - 1;
-        curve[index] = Math.max(-0.015, Math.min(0.015, sample * 12));
+        curve[index] = Math.tanh(sample) / Math.tanh(1);
     }
 
     return curve;
 };
 
-const createShittyMicProcessor = (context: AudioContext) => {
-    const processor = context.createScriptProcessor(2048, 2, 2);
-    const heldSamples = [0, 0];
-    const pitchBuffer = new Float32Array(8192);
-    const pitchMask = pitchBuffer.length - 1;
-    let holdCounter = 0;
-    let latch = 0;
-    let flutterPhase = 0;
-    let pitchReadIndex = pitchBuffer.length / 2;
-    let pitchWriteIndex = 0;
+// Runs the bad-mic effects on the mono sum. The engine reads config once per
+// buffer, not once per sample. Buffers stay small at low sample rates so the
+// latency does not grow to a quarter second.
+const createMicEffectProcessor = (context: AudioContext) => {
+    const processor = context.createScriptProcessor(context.sampleRate < 16000 ? 512 : 2048, 2, 2);
+    const engine = createMicEffectEngine(context.sampleRate);
+    let mono = new Float32Array(processor.bufferSize);
+    let processed = new Float32Array(processor.bufferSize);
 
     processor.onaudioprocess = event => {
         const { inputBuffer, outputBuffer } = event;
-        const channelCount = Math.min(outputBuffer.numberOfChannels, heldSamples.length);
-        const leftInput = inputBuffer.getChannelData(0);
-        const rightInput = inputBuffer.numberOfChannels > 1
-            ? inputBuffer.getChannelData(1)
-            : leftInput;
+        const left = inputBuffer.getChannelData(0);
+        const right = inputBuffer.numberOfChannels > 1 ? inputBuffer.getChannelData(1) : left;
+        const leftOut = outputBuffer.getChannelData(0);
+        const rightOut = outputBuffer.numberOfChannels > 1 ? outputBuffer.getChannelData(1) : leftOut;
+        const config = getMicrophoneRuntimeConfig();
 
-        for (let channel = 0; channel < channelCount; channel++) {
-            const output = outputBuffer.getChannelData(channel);
+        if (!config.effectsActive) {
+            leftOut.fill(0);
+            rightOut.fill(0);
+            return;
+        }
 
-            for (let index = 0; index < output.length; index++) {
-                const runtimeConfig = getMicrophoneRuntimeConfig();
-                const monoSample = (leftInput[index] + rightInput[index]) * 0.5;
-                const pitchShiftMix = runtimeConfig.shittyPitchShiftPercent / 100;
+        if (mono.length !== left.length) {
+            mono = new Float32Array(left.length);
+            processed = new Float32Array(left.length);
+        }
 
-                pitchBuffer[pitchWriteIndex] = monoSample;
-                let pitchedSample = monoSample;
+        for (let index = 0; index < left.length; index++) {
+            mono[index] = (left[index] + right[index]) * 0.5;
+        }
 
-                if (pitchShiftMix > 0) {
-                    const readBaseIndex = Math.floor(pitchReadIndex) & pitchMask;
-                    const readNextIndex = (readBaseIndex + 1) & pitchMask;
-                    const readMix = pitchReadIndex - Math.floor(pitchReadIndex);
-                    pitchedSample = pitchBuffer[readBaseIndex] * (1 - readMix) + pitchBuffer[readNextIndex] * readMix;
-                    pitchReadIndex = (pitchReadIndex + 1 + pitchShiftMix * 1.4) % pitchBuffer.length;
-                    const pitchDistance = (pitchWriteIndex - Math.floor(pitchReadIndex) + pitchBuffer.length) & pitchMask;
-                    if (pitchDistance < 256) pitchReadIndex = (pitchWriteIndex - 1024 + pitchBuffer.length) & pitchMask;
-                } else {
-                    pitchReadIndex = (pitchWriteIndex - 1024 + pitchBuffer.length) & pitchMask;
-                }
+        // Bass, resonance or muffle alone have no engine stage, so pass the voice through.
+        if (isMicEffectActive(config.effects)) engine.process(mono, processed, deriveMicEffectParams(config.effects));
+        else processed.set(mono);
 
-                pitchWriteIndex = (pitchWriteIndex + 1) & pitchMask;
-
-                if (!runtimeConfig.degradeAudio) {
-                    output[index] = pitchShiftMix > 0
-                        ? Math.max(-1, Math.min(1, pitchedSample * (1.1 + pitchShiftMix * 0.9)))
-                        : channel === 0
-                            ? leftInput[index]
-                            : rightInput[index];
-                    continue;
-                }
-
-                if (holdCounter <= 0) {
-                    const shittyVoiceBoost = runtimeConfig.shittyVoiceBoostPercent > 0;
-                    const boostMultiplier = 1 + runtimeConfig.shittyVoiceBoostPercent / 20;
-                    const dropoutMix = runtimeConfig.shittyDropoutPercent / 100;
-                    const staticMix = runtimeConfig.shittyStaticPercent / 100;
-                    const level = Math.min(1, Math.abs(monoSample) * (shittyVoiceBoost ? 45 * boostMultiplier : 45));
-                    const gateThreshold = shittyVoiceBoost
-                        ? (runtimeConfig.shittyHardCutout ? 0.08 : 0.02)
-                        : (runtimeConfig.shittyHardCutout ? 0.16 : 0.08);
-                    const dropoutChance = shittyVoiceBoost
-                        ? (runtimeConfig.shittyHardCutout ? 0.45 : 0.2) + dropoutMix * 0.5
-                        : (runtimeConfig.shittyHardCutout ? 0.55 : 0.25) + dropoutMix * 0.45;
-                    if (Math.random() < 0.9) latch = Math.random() < 0.5 ? -1 : 1;
-
-                    const hiss = (Math.random() * 2 - 1) * (0.02 + staticMix * 0.35);
-                    const digitalNoise = latch * ((shittyVoiceBoost ? 0.2 * boostMultiplier : 0.2) + level * (shittyVoiceBoost ? 0.18 * boostMultiplier : 0.18)) + hiss;
-                    heldSamples[channel] = level < gateThreshold || Math.random() < dropoutChance
-                        ? 0
-                        : Math.max(-(shittyVoiceBoost ? 0.35 * boostMultiplier : 0.35), Math.min(shittyVoiceBoost ? 0.35 * boostMultiplier : 0.35, digitalNoise));
-                }
-
-                const bitcrushMix = runtimeConfig.shittyBitcrushPercent / 100;
-                const clippingMix = runtimeConfig.shittyClippingPercent / 100;
-                const flutterMix = runtimeConfig.shittyFlutterPercent / 100;
-                const voiceBoostMix = runtimeConfig.shittyVoiceBoostPercent / 100;
-                const blownVoice = voiceBoostMix > 0 || pitchShiftMix > 0
-                    ? Math.max(-1, Math.min(1, pitchedSample * (8 + voiceBoostMix * 40 + pitchShiftMix * 18)))
-                    : 0;
-                const flutter = flutterMix > 0
-                    ? Math.sin(flutterPhase) * flutterMix * 0.22
-                    : 0;
-                const crushedStep = Math.max(0.02, 0.4 - bitcrushMix * 0.35);
-                const clipLimit = Math.max(0.08, 0.85 - clippingMix * 0.72);
-                const pitchLead = pitchShiftMix > 0 ? pitchedSample * (0.45 + pitchShiftMix * 0.75) : 0;
-                const mixed = heldSamples[channel] * (pitchShiftMix > 0 ? 0.35 : 1)
-                    + blownVoice * Math.max(0.45, voiceBoostMix * 1.25 + pitchShiftMix * 0.8)
-                    + pitchLead
-                    + flutter;
-                const crushed = Math.round(mixed / crushedStep) * crushedStep;
-                output[index] = Math.max(-clipLimit, Math.min(clipLimit, crushed));
-                holdCounter = (holdCounter + 1) % 640;
-                flutterPhase += 0.18 + flutterMix * 0.42;
-            }
+        for (let index = 0; index < leftOut.length; index++) {
+            leftOut[index] = processed[index];
+            rightOut[index] = processed[index];
         }
     };
 
@@ -229,7 +175,7 @@ export const wrapMicrophoneStream = async (stream: MediaStream, constraints: Med
     if (!shouldUseMicrophoneTweaks(constraints) || stream.getAudioTracks().length === 0) return stream;
 
     const microphoneConfig = getMicrophoneRuntimeConfig();
-    if (microphoneConfig.routing === "stereo" && !microphoneConfig.degradeAudio && microphoneConfig.shittyPitchShiftPercent <= 0 && microphoneConfig.cleanGain === 1) return stream;
+    if (microphoneConfig.routing === "stereo" && !microphoneConfig.effectsActive && microphoneConfig.cleanGain === 1) return stream;
 
     const AudioContextCtor = getAudioContextConstructor();
     if (!AudioContextCtor) return stream;
@@ -241,18 +187,15 @@ export const wrapMicrophoneStream = async (stream: MediaStream, constraints: Med
     const destination = context.createMediaStreamDestination();
     const leftGain = context.createGain();
     const rightGain = context.createGain();
+    const cleanGain = context.createGain();
     const highPass = context.createBiquadFilter();
     const lowPass = context.createBiquadFilter();
     const drive = context.createGain();
     const shaper = context.createWaveShaper();
-    const processor = createShittyMicProcessor(context);
-    const cleanGain = context.createGain();
-    const dirtyGain = context.createGain();
-    const outputGain = context.createGain();
-    const boostGain = context.createGain();
-    const bassBoostFilter = context.createBiquadFilter();
-    const voiceBoostDrive = context.createGain();
-    const voiceBoostGain = context.createGain();
+    const processor = createMicEffectProcessor(context);
+    const bassShelf = context.createBiquadFilter();
+    const limiter = context.createDynamicsCompressor();
+    const wetGain = context.createGain();
 
     source.connect(splitter);
 
@@ -277,49 +220,48 @@ export const wrapMicrophoneStream = async (stream: MediaStream, constraints: Med
             source.connect(merger, 0, 1);
     }
 
-    highPass.type = "highpass";
-    lowPass.type = "lowpass";
-    shaper.curve = createShittyMicCurve();
-    shaper.oversample = "none";
-
+    // Clean path: the input at the mic gain, used whenever no effect is active.
     merger.connect(cleanGain);
     cleanGain.connect(destination);
+
+    // Effect path: band-limit for the radio/telephone character, saturate, then the processor.
+    highPass.type = "highpass";
+    highPass.frequency.value = 200;
+    highPass.Q.value = 0.7;
+    lowPass.type = "lowpass";
+    lowPass.Q.value = 0.7;
+    shaper.curve = createSoftClipCurve();
+    shaper.oversample = "2x";
+    bassShelf.type = "lowshelf";
+    bassShelf.frequency.value = 180;
 
     merger.connect(highPass);
     highPass.connect(lowPass);
     lowPass.connect(drive);
     drive.connect(shaper);
     shaper.connect(processor);
-    processor.connect(outputGain);
-    outputGain.connect(dirtyGain);
-    dirtyGain.connect(boostGain);
-    boostGain.connect(destination);
+    processor.connect(bassShelf);
+    bassShelf.connect(limiter);
+    limiter.connect(wetGain);
+    wetGain.connect(destination);
 
-    bassBoostFilter.type = "lowshelf";
-
-    merger.connect(bassBoostFilter);
-    bassBoostFilter.connect(voiceBoostDrive);
-    voiceBoostDrive.connect(voiceBoostGain);
-    voiceBoostGain.connect(destination);
+    // Bass boost and the amplifier can push the wet path past full scale; this keeps it inside.
+    limiter.threshold.value = -12;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 12;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.15;
 
     const sync = () => {
-        const { degradeAudio } = getMicrophoneRuntimeConfig();
-        const { cleanGain: cleanGainFactor, shittyBassBoostPercent, shittyBassResonancePercent, shittyMufflePercent, shittyStaticPercent, shittyVoiceBoostPercent } = getMicrophoneRuntimeConfig();
+        const config = getMicrophoneRuntimeConfig();
+        const active = config.effectsActive;
 
-        cleanGain.gain.value = degradeAudio ? 0 : cleanGainFactor;
-        dirtyGain.gain.value = degradeAudio ? 1 : 0;
-        highPass.frequency.value = 3000;
-        highPass.Q.value = 7;
-        lowPass.frequency.value = degradeAudio ? 3600 - shittyMufflePercent * 24 : 3600;
-        lowPass.Q.value = 7;
-        drive.gain.value = 55;
-        outputGain.gain.value = degradeAudio ? 0.45 + shittyVoiceBoostPercent / 25 + shittyStaticPercent / 250 : 1;
-        boostGain.gain.value = degradeAudio ? 1 + shittyVoiceBoostPercent / 2 : 1;
-        bassBoostFilter.frequency.value = 180;
-        bassBoostFilter.gain.value = degradeAudio ? shittyBassBoostPercent / 4 : 0;
-        bassBoostFilter.Q.value = degradeAudio ? 0.7 + shittyBassResonancePercent / 20 : 0.7;
-        voiceBoostDrive.gain.value = degradeAudio ? 1 + shittyVoiceBoostPercent / 2 : 1;
-        voiceBoostGain.gain.value = degradeAudio ? shittyVoiceBoostPercent / 6 : 0;
+        cleanGain.gain.value = active ? 0 : config.cleanGain;
+        wetGain.gain.value = active ? 1 : 0;
+        drive.gain.value = 1;
+        lowPass.frequency.value = config.shittyLowPassHz;
+        bassShelf.gain.value = active ? config.shittyBassBoostDb : 0;
+        bassShelf.Q.value = 0.7 + config.shittyBassResonancePercent / 20;
     };
 
     sync();

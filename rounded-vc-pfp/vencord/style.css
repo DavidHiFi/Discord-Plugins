@@ -10,12 +10,29 @@ div[class*="videoWrapper"] {
     overflow: hidden !important;
 }
 
+/* The picture is painted and masked on ::before so this element can carry the
+   glow filter unmasked; a filter on the backdrop wrapper would also trace
+   whatever that wrapper paints, like a profile gradient. */
 div[data-selenium-video-tile] div[role="img"] {
+    position: relative;
     width: 100% !important;
     height: 100% !important;
+    background: none !important;
+    filter: var(--vc-pfp-glow-filter, none) !important;
+    transition: filter 250ms ease;
+
+    > * {
+        display: none;
+    }
+}
+
+div[data-selenium-video-tile] div[role="img"]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
     background: center / contain no-repeat;
     background-image: var(--full-res-avatar);
-    transform: scale(var(--vc-pfp-zoom, 1)) !important;
+    transform: scale(var(--vc-pfp-zoom, 1));
     -webkit-mask-image: var(--vc-pfp-avatar-mask, url("data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Crect%20width='100'%20height='100'%20rx='5'%20fill='%23fff'/%3E%3C/svg%3E"));
     -webkit-mask-repeat: no-repeat;
     -webkit-mask-position: center;
@@ -24,10 +41,6 @@ div[data-selenium-video-tile] div[role="img"] {
     mask-repeat: no-repeat;
     mask-position: center;
     mask-size: contain;
-
-    > * {
-        display: none;
-    }
 }
 
 /* The doubled [role="img"] raises specificity above FullVCPFP's
@@ -43,17 +56,6 @@ div[data-selenium-video-tile] div[role="img"][role="img"] {
    a mangled class name. */
 div[data-selenium-video-tile][style*="--vc-pfp-hide-bg"] [class*="background"] {
     background: none !important; /* user's hide-background switch */
-}
-
-/* The glow paints through the filter var the plugin emits, independently of
-    the background switch: it wraps the picture over the box or banner too.
-    The content backdrop wrapper exists only on picture tiles, which is what
-    scopes the rule to them. Selectors stay :has()-free on purpose: the
-    composed managed sheet can silently drop :has() rules from its parsed
-    cascade at boot (measured 2026-10-08 evening), while plain attribute and
-    descendant selectors survive every compose. */
-div[data-selenium-video-tile] div[class*="background"] {
-    filter: var(--vc-pfp-glow-filter, none) !important; /* the glow var is set per tile by the plugin */
 }
 
 /* Speaking indicator moved onto the picture: the green glow rides the same

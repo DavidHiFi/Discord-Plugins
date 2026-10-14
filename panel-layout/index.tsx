@@ -58,8 +58,8 @@ import {
 } from "./modules";
 import { SettingsGearIcon } from "./modules/icons";
 
-migratePluginSettings("deraculpanellayout", "PanelLayout");
-migratePluginSettings("deracul-panel-layout", "PanelLayout");
+migratePluginSettings("PanelLayout", "deraculpanellayout");
+migratePluginSettings("PanelLayout", "deracul-panel-layout");
 
 // PanelLayout was `required`, and isPluginEnabled short-circuits to true on that flag, so it
 // ran for everyone without ever writing an `enabled` key. Now that it is an ordinary optional

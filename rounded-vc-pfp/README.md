@@ -9,7 +9,7 @@ Rounded full-resolution avatars on call tiles, with three sliders, a background 
 - Hide user backgrounds removes the backgrounds other users set with plugins like USRBG; left off, those stay visible even when the tile background switch is on.
 - Turn the glow on shapes a two-layer glow that trails the masked picture outline (radius, zoom and mask all carry along); it works whether the background switch is on or not.
 - Glow color takes the hex code of that glow, for example #45475a; the glow mixes its own transparency levels, so an alpha channel in the hex is ignored.
-- Speaking indicator chooses where the green speaking glow lives: Box border keeps Discord's native ring around the tile, Profile picture moves the green glow onto the picture edge instead (the tile's own ring stands down; camera and screen-share tiles follow the video edge with the same green).
+- Speaking indicator chooses where the green speaking glow lives: Box border keeps Discord's native ring around the tile, Profile picture moves the green glow onto the picture edge instead (the tile's own ring stands down for picture tiles; camera tiles keep the native tile ring). Tiles showing live stream video never show it; unopened or hidden streams still render the avatar and do. The glow follows the picture whether or not the tile background shows.
 
 The halo keeps fading past the tile edges: the stylesheet releases the tile's two clipping levels for picture tiles while the box is hidden, so there is no straight cut line against the voice panel.
 

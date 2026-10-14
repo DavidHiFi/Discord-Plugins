@@ -156,6 +156,10 @@ const createFilteredVideoTrack = (source: MediaStreamTrack, getFilter: FilterPro
 };
 
 const wrapStreamVideo = (stream: MediaStream, getFilter: FilterProvider): MediaStream => {
+    // Re-encoding every frame through a canvas costs CPU and can soften the picture, so
+    // only streams captured while the filter is on are routed through it.
+    if (!getOutgoingVideoFilterEnabled()) return stream;
+
     const source = stream.getVideoTracks()[0];
     if (source == null || managedVideoStreams.has(stream)) return stream;
 
