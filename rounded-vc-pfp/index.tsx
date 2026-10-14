@@ -13,7 +13,7 @@ import usrbg from "@plugins/usrbg";
 import { fetchUserProfile } from "@utils/discord";
 import { getUserAvatarUrl } from "@utils/misc";
 import definePlugin, { makeRange, OptionType } from "@utils/types";
-import { ChannelRTCStore, ChannelStore, IconUtils, UserProfileStore, UserStore, useStateFromStores,VoiceStateStore } from "@webpack/common";
+import { ChannelRTCStore, ChannelStore, IconUtils, SelectedChannelStore, UserProfileStore, UserStore, useStateFromStores, VoiceStateStore } from "@webpack/common";
 
 import style from "./style.css?managed";
 
@@ -112,6 +112,32 @@ function findParticipant(children: unknown, depth = 0): TileParticipant | undefi
     const { props } = children as { props?: { children?: unknown; participant?: TileParticipant; }; };
     if (!props) return undefined;
     return props.participant ?? findParticipant(props.children, depth + 1);
+}
+
+// The id of the stream selected in the call view, if any. Stream tiles paint
+// live video only while their stream is this one; the rest of the time the
+// tile shows a static preview picture.
+type SelectedParticipant = { type?: unknown; id?: unknown } | null;
+// A participant's own voice state can lag a join, so fall back to the call we are in
+function getTileChannelId(userId: string): string | undefined {
+    return VoiceStateStore.getVoiceStateForUser(userId)?.channelId ?? SelectedChannelStore.getVoiceChannelId() ?? undefined;
+}
+
+function getSelectedStreamId(channelId: string): string | null {
+    const store = ChannelRTCStore as unknown as { getSelectedParticipant?: (id: string) => SelectedParticipant; };
+    const selected = store.getSelectedParticipant?.(channelId) ?? null;
+    if (!selected || selected.type !== "STREAM" || selected.id == null) return null;
+    return String(selected.id);
+}
+
+// The stream key ends with the owner's id in Discord's raw format and in the
+// guild:/call: forms, so the owner match covers both.
+function isWatchedStream(channelId: string | null | undefined, participantUserId: string, participant: TileParticipant | undefined): boolean {
+    if (!channelId || !participantUserId) return false;
+    const selected = getSelectedStreamId(channelId);
+    if (selected === null) return false;
+    const sid = participant?.streamId != null ? String(participant.streamId) : "";
+    return (sid !== "" && selected === sid) || selected.endsWith(`:${participantUserId}`) || selected === participantUserId;
 }
 
 const settings = definePluginSettings({
@@ -214,11 +240,15 @@ export default definePlugin({
     useTileBanner({ participantUserId }: { participantUserId?: string; }) {
         useStateFromStores([UserProfileStore], () => UserProfileStore.getUserProfile(participantUserId ?? "")?.banner, [participantUserId]);
         // getVoiceBackgroundStyles reads the speaking flag imperatively, so subscribe to re-render on changes
-        useStateFromStores([ChannelRTCStore, VoiceStateStore], () => {
-            const channelId = VoiceStateStore.getVoiceStateForUser(participantUserId ?? "")?.channelId;
-            return channelId
+        useStateFromStores([ChannelRTCStore, VoiceStateStore, SelectedChannelStore], () => {
+            const channelId = getTileChannelId(participantUserId ?? "");
+            const speaking = channelId
                 ? ChannelRTCStore.getSpeakingParticipants(channelId).some(p => p.user.id === participantUserId && p.speaking)
                 : false;
+            // A stream tile's glow depends on whether its stream is the one
+            // selected in the call view, so the selection re-renders too.
+            const selected = channelId ? getSelectedStreamId(channelId) : null;
+            return `${speaking ? 1 : 0}:${selected ?? ""}`;
         }, [participantUserId]);
         // soundshare never sets Discord's speaking flag
         useStateFromStores([audioActivityStore], audioActivityStore.getVersion, []);
@@ -231,7 +261,7 @@ export default definePlugin({
         if (!user) return;
         const legacyUser: typeof user & { getDefaultAvatarURL?: () => string; } = user;
 
-        const channelId = VoiceStateStore.getVoiceStateForUser(participantUserId)?.channelId;
+        const channelId = getTileChannelId(participantUserId);
         const guildId = channelId ? ChannelStore.getChannel(channelId)?.guild_id : undefined;
         const participant = findParticipant(children);
         const participantType = participant?.type;
@@ -242,8 +272,13 @@ export default definePlugin({
         const isSpeaking = (channelId
             ? ChannelRTCStore.getSpeakingParticipants(channelId).some(p => p.user.id === participantUserId && p.speaking)
             : false) || audioActiveNow(participantUserId);
-        // Only tiles showing the participant's picture glow: not live stream video or activity embeds
-        const speakingGlow = isSpeaking && (participantType === undefined || participantType === 1 || participantType === 2);
+        // Only tiles showing the participant's picture glow. A live stream tile
+        // paints video while its stream is the one selected in the call view and
+        // stays unlit then; the rest of the time it shows a static preview
+        // picture (Discord's or StreamEnhancer's custom one) and glows like any
+        // other tile. Activity embeds never carry the participant's picture.
+        const paintsLiveVideo = isStream && participantType === 0 && isWatchedStream(channelId, participantUserId, participant);
+        const speakingGlow = isSpeaking && !paintsLiveVideo && (participantType === undefined || participantType === 0 || participantType === 1 || participantType === 2);
 
         // Fallback chain from the local FullVCPFP fix: getUserAvatarUrl's guild
         // branch can return undefined, which used to render blank tiles.

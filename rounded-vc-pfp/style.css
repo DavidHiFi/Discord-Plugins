@@ -62,6 +62,14 @@ div[data-selenium-video-tile][style*="--vc-pfp-speaking"]:not([style*="--vc-pfp-
     box-shadow: 0 0 0 2px var(--green-360, #23a55a), 0 0 16px 3px rgb(35 165 90 / 50%) !important;
 }
 
+/* A stream tile paints its preview picture over the avatar layer, so the filter
+   glow on the avatar has no visible host; ring the tile box instead. The tile
+   carries the speaking marker only while its video is not painting (the watched
+   stream stands down), so a playing video never gets ringed. */
+div[data-selenium-video-tile][style*="--vc-pfp-stream"][style*="--vc-pfp-ring-pic"][style*="--vc-pfp-speaking"] {
+    box-shadow: 0 0 0 2px var(--green-360, #23a55a), 0 0 16px 3px rgb(35 165 90 / 50%) !important;
+}
+
 /* Camera tiles have no picture, so they keep Discord's own tile border */
 div[data-selenium-video-tile][style*="--vc-pfp-ring-pic"]:not([style*="--vc-pfp-camera"]) [class*="border__"] {
     display: none !important;

@@ -35,6 +35,10 @@ const STREAM_STATS_MS = 2000;
 // A flagged speaker with no bridge level for this long falls back to stats.
 // Shorter gaps are the speaking hangover or the first frames after a flip.
 const NATIVE_GAP_MS = 500;
+// Raw (unsmoothed, normalized) level that counts a participant as audibly active, and how long it
+// holds. The glow reads this instead of the smoothed bar so it starts with the first audio and ends promptly.
+const ACTIVE_LEVEL = 0.05;
+const ACTIVE_HOLD_MS = 200;
 const HOLD_MS = 1500;
 // Visual ballistics, advanced per frame from timestamps.
 const ATTACK_MS = 25;
@@ -107,6 +111,7 @@ interface Meter {
     nativeAvailable?: boolean;
     nativeMissAt?: number;
     nativeGap?: boolean;
+    activeUntil?: number;
     mono: boolean;
     display: [number, number];
     peak: [number, number];
@@ -758,13 +763,18 @@ function notifySubscribers() {
 // need more than Discord's mic-only speaking flag. Changes dispatch a window event.
 const audioActiveUsers = new Set<string>();
 let audioActiveDirty = false;
+function noteActive(meter: Meter, rawLevel: number, now: number) {
+    if (rawLevel >= ACTIVE_LEVEL) meter.activeUntil = now + ACTIVE_HOLD_MS;
+}
+
 function updateAudioActive() {
     const seen = new Set<string>();
+    const now = Date.now();
     for (const [userId, meter] of meters) {
-        const level = meter.mono ? meter.display[0] : Math.max(meter.display[0], meter.display[1]);
         const key = userId.startsWith("stream:") ? userId.slice(7) : userId;
         seen.add(key);
-        const active = level > 0.01;
+        const active = (meter.activeUntil ?? 0) > now;
+        if (active && debugState.firstActiveAt == null) debugState.firstActiveAt = now;
         if (active !== audioActiveUsers.has(key)) {
             if (active) audioActiveUsers.add(key);
             else audioActiveUsers.delete(key);
@@ -807,10 +817,14 @@ function advanceEnvelopes(now: number) {
 
             smooth(meter, 0, left.rms, left.peak, now);
             smooth(meter, 1, right.rms, right.peak, now);
+            noteActive(meter, Math.max(left.rms, right.rms), now);
             if (meter.ownsInput) checkSelfMismatch(meter, muted === true, Math.max(left.rms, right.rms), now);
         } else if (meter.nativeAvailable && !meter.nativeGap) {
-            smooth(meter, 0, normalize(meter.native?.rmsLeft ?? 0, floorDb), normalize(meter.native?.peakLeft ?? 0, floorDb), now);
-            smooth(meter, 1, normalize(meter.native?.rmsRight ?? 0, floorDb), normalize(meter.native?.peakRight ?? 0, floorDb), now);
+            const rmsLeft = normalize(meter.native?.rmsLeft ?? 0, floorDb);
+            const rmsRight = normalize(meter.native?.rmsRight ?? 0, floorDb);
+            smooth(meter, 0, rmsLeft, normalize(meter.native?.peakLeft ?? 0, floorDb), now);
+            smooth(meter, 1, rmsRight, normalize(meter.native?.peakRight ?? 0, floorDb), now);
+            noteActive(meter, Math.max(rmsLeft, rmsRight), now);
         } else {
             const heard = isHeard(userId);
             let linear = meter.amplitude;
@@ -824,6 +838,8 @@ function advanceEnvelopes(now: number) {
             }
 
             const value = heard ? normalize(linear, floorDb) : 0;
+            // received audio counts as activity even before Discord's speaking flag arrives
+            noteActive(meter, normalize(meter.amplitude, floorDb), now);
             const [panL, panR] = getPan(userId);
 
             smooth(meter, 0, value * panL, value * panL, now);
@@ -893,6 +909,8 @@ function tick() {
         if (conn !== connection) {
             dropAll();
             connection = conn;
+            debugState.connectedAt = Date.now();
+            delete debugState.firstActiveAt;
             lastScanAt = 0;
             statsFailed = false;
         }
