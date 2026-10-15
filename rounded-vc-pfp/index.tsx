@@ -36,11 +36,9 @@ const audioActivityStore = {
     },
     getVersion: () => audioActivityVersion
 };
-if (typeof window !== "undefined") {
-    window.addEventListener("testcord-vu-audio-change", () => {
-        audioActivityVersion++;
-        for (const listener of audioActivityListeners) listener();
-    });
+function onAudioActivityChange() {
+    audioActivityVersion++;
+    for (const listener of audioActivityListeners) listener();
 }
 
 function audioActiveNow(userId: string) {
@@ -76,14 +74,47 @@ function glowFilter(color: string): string | undefined {
     return `drop-shadow(0 0 14px rgba(${r}, ${g}, ${b}, 0.4)) drop-shadow(0 0 3px rgba(${r}, ${g}, ${b}, 0.6))`;
 }
 
-const bannerFetches = new Set<string>();
+// Profile fetches run one at a time. A full channel used to fire every
+// participant's fetch at once; the rate-limited ones failed, nothing re-rendered
+// the tile, and those users never got their banner. A cached profile without a
+// banner may be a stub left by a failed fetch, so each user gets one uncached
+// fetch per session, retried on failure.
+const bannerFetchAttempts = new Map<string, number>();
+const bannerFetchQueue: string[] = [];
+let bannerFetchRunning = false;
+const bannerRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+
+async function runBannerFetchQueue() {
+    if (bannerFetchRunning) return;
+    bannerFetchRunning = true;
+    while (bannerFetchQueue.length) {
+        const userId = bannerFetchQueue.shift()!;
+        try {
+            await fetchUserProfile(userId, undefined, false);
+        } catch {
+            const attempts = (bannerFetchAttempts.get(userId) ?? 0) + 1;
+            bannerFetchAttempts.set(userId, attempts);
+            if (attempts < 4) {
+                const retry = setTimeout(() => {
+                    bannerRetryTimers.delete(retry);
+                    bannerFetchQueue.push(userId);
+                    void runBannerFetchQueue();
+                }, 5000 * attempts);
+                bannerRetryTimers.add(retry);
+            }
+        }
+        await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    bannerFetchRunning = false;
+}
 
 function getProfileBannerUrl(userId: string): string | undefined {
-    const banner = UserProfileStore.getUserProfile(userId)?.banner;
+    const banner = UserProfileStore.getUserProfile(userId)?.banner ?? UserStore.getUser(userId)?.banner;
     if (!banner) {
-        if (!bannerFetches.has(userId)) {
-            bannerFetches.add(userId);
-            fetchUserProfile(userId).catch(() => bannerFetches.delete(userId));
+        if (!bannerFetchAttempts.has(userId)) {
+            bannerFetchAttempts.set(userId, 0);
+            bannerFetchQueue.push(userId);
+            void runBannerFetchQueue();
         }
         return undefined;
     }
@@ -114,30 +145,9 @@ function findParticipant(children: unknown, depth = 0): TileParticipant | undefi
     return props.participant ?? findParticipant(props.children, depth + 1);
 }
 
-// The id of the stream selected in the call view, if any. Stream tiles paint
-// live video only while their stream is this one; the rest of the time the
-// tile shows a static preview picture.
-type SelectedParticipant = { type?: unknown; id?: unknown } | null;
 // A participant's own voice state can lag a join, so fall back to the call we are in
 function getTileChannelId(userId: string): string | undefined {
     return VoiceStateStore.getVoiceStateForUser(userId)?.channelId ?? SelectedChannelStore.getVoiceChannelId() ?? undefined;
-}
-
-function getSelectedStreamId(channelId: string): string | null {
-    const store = ChannelRTCStore as unknown as { getSelectedParticipant?: (id: string) => SelectedParticipant; };
-    const selected = store.getSelectedParticipant?.(channelId) ?? null;
-    if (!selected || selected.type !== "STREAM" || selected.id == null) return null;
-    return String(selected.id);
-}
-
-// The stream key ends with the owner's id in Discord's raw format and in the
-// guild:/call: forms, so the owner match covers both.
-function isWatchedStream(channelId: string | null | undefined, participantUserId: string, participant: TileParticipant | undefined): boolean {
-    if (!channelId || !participantUserId) return false;
-    const selected = getSelectedStreamId(channelId);
-    if (selected === null) return false;
-    const sid = participant?.streamId != null ? String(participant.streamId) : "";
-    return (sid !== "" && selected === sid) || selected.endsWith(`:${participantUserId}`) || selected === participantUserId;
 }
 
 const settings = definePluginSettings({
@@ -220,6 +230,19 @@ export default definePlugin({
     authors: [{ name: "mochie", id: 1043599230247374869n }, { name: "DavidHiFi", id: 1553713171938938891n }],
     settings,
     managedStyle: style,
+
+    start() {
+        window.addEventListener("testcord-vu-audio-change", onAudioActivityChange);
+    },
+
+    stop() {
+        window.removeEventListener("testcord-vu-audio-change", onAudioActivityChange);
+        for (const timer of bannerRetryTimers) clearTimeout(timer);
+        bannerRetryTimers.clear();
+        bannerFetchQueue.length = 0;
+        bannerFetchAttempts.clear();
+    },
+
     patches: [
         {
             find: "\"data-selenium-video-tile\":",
@@ -227,12 +250,15 @@ export default definePlugin({
                 // USRBG patches this component from the function head and wins the
                 // patch-order race, so a head-anchored lookahead stops matching after
                 // its Object.assign lands (notes/2026-10-08-voice-tile-avatars.md).
-                // Anchor after the destructuring like the local userplugin copy;
-                // Object.assign merges the style keys in any apply order. The hook
-                // call before the assign re-renders the tile when the participant's
+                // Anchor after the destructuring like the local userplugin copy.
+                // The styles go into a fresh object each render: the parent hands
+                // down the same style object, and mutating it in place left React
+                // comparing the object with itself, so cleared keys such as the
+                // picture-mode ring stayed in the DOM after switching to box mode.
+                // The hook call before it re-renders the tile when the participant's
                 // profile banner arrives, and stays unconditional so hook order holds.
                 match: /(?<=let\{children:\i,className:\i,style:(\i),noBorder:\i=!1,participantUserId:\i,ref:\i\}=(\i);)/,
-                replace: "$self.useTileBanner($2);Object.assign($1=$1||{},$self.getVoiceBackgroundStyles($2));",
+                replace: "$self.useTileBanner($2);$1={...$1,...$self.getVoiceBackgroundStyles($2)};",
             }
         },
     ],
@@ -245,10 +271,7 @@ export default definePlugin({
             const speaking = channelId
                 ? ChannelRTCStore.getSpeakingParticipants(channelId).some(p => p.user.id === participantUserId && p.speaking)
                 : false;
-            // A stream tile's glow depends on whether its stream is the one
-            // selected in the call view, so the selection re-renders too.
-            const selected = channelId ? getSelectedStreamId(channelId) : null;
-            return `${speaking ? 1 : 0}:${selected ?? ""}`;
+            return speaking;
         }, [participantUserId]);
         // soundshare never sets Discord's speaking flag
         useStateFromStores([audioActivityStore], audioActivityStore.getVersion, []);
@@ -272,13 +295,10 @@ export default definePlugin({
         const isSpeaking = (channelId
             ? ChannelRTCStore.getSpeakingParticipants(channelId).some(p => p.user.id === participantUserId && p.speaking)
             : false) || audioActiveNow(participantUserId);
-        // Only tiles showing the participant's picture glow. A live stream tile
-        // paints video while its stream is the one selected in the call view and
-        // stays unlit then; the rest of the time it shows a static preview
-        // picture (Discord's or StreamEnhancer's custom one) and glows like any
-        // other tile. Activity embeds never carry the participant's picture.
-        const paintsLiveVideo = isStream && participantType === 0 && isWatchedStream(channelId, participantUserId, participant);
-        const speakingGlow = isSpeaking && !paintsLiveVideo && (participantType === undefined || participantType === 0 || participantType === 1 || participantType === 2);
+        // Only voice tiles showing the participant's picture glow. Like Discord's
+        // own border, the speaking glow belongs to the person, not their screen
+        // share or activity, so stream and activity tiles never light up.
+        const speakingGlow = isSpeaking && (participantType === undefined || participantType === 2);
 
         // Fallback chain from the local FullVCPFP fix: getUserAvatarUrl's guild
         // branch can return undefined, which used to render blank tiles.

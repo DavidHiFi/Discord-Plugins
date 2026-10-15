@@ -68,19 +68,11 @@ div[data-selenium-video-tile][style*="--vc-pfp-ring-pic"] [class*="border__"] {
     display: none !important; /* speaking indicator switched to the picture */
 }
 
-/* Camera and stream tiles have no picture box for the bloom to wrap; their
+/* Camera tiles have no picture box for the bloom to wrap; their
    ring follows the video edge instead, which fills the tile and already
    carries the rounded corners. */
 div[data-selenium-video-tile][style*="--vc-pfp-ring-pic"][style*="--vc-pfp-speaking: 1"] video {
     box-shadow: inset 0 0 0 3px var(--green-360, #23a55a) !important; /* Discord's own speaking green */
-}
-
-/* A stream tile paints its preview picture over the avatar layer, so the
-   filter glow on the avatar has no visible host; ring the tile box instead.
-   The tile carries the speaking marker only while its video is not painting
-   (the watched stream stands down), so a playing video never gets ringed. */
-div[data-selenium-video-tile][style*="--vc-pfp-stream"][style*="--vc-pfp-ring-pic"][style*="--vc-pfp-speaking"] {
-    box-shadow: 0 0 0 2px var(--green-360, #23a55a), 0 0 16px 3px rgb(35 165 90 / 50%) !important; /* Discord's own speaking green */
 }
 
 /* The halo must keep fading outside the tile box or it gets a hard straight

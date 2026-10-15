@@ -1061,10 +1061,21 @@ const VoiceMeter = ErrorBoundary.wrap(({ userId, height = BAR_HEIGHT, width = BA
         ensureFrameLoop();
     }, [userId]);
 
+    const { showPeak } = settings.store;
+    // The peak lines mount and unmount with the setting, after attachRoot has
+    // already recorded the bar elements, so point the frame loop at the new ones.
+    React.useEffect(() => {
+        const dom = domRef.current;
+        if (!dom) return;
+        dom.peaks = [peakRefs[0].current, peakRefs[1].current];
+        dom.lastPeak = ["", ""];
+        dom.lastPeakOpacity = ["", ""];
+        dom.colors = ["", ""];
+    }, [showPeak]);
+
     const meter = meters.get(userId);
     if (!meter) return null;
 
-    const { showPeak } = settings.store;
     const gap = Math.max(2, Math.round(width / 2));
     const measured = (meter.tap != null || meter.nativeAvailable === true) && !meter.mono;
     const title = userId.startsWith("stream:")

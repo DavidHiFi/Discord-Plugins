@@ -54,19 +54,11 @@ div[data-selenium-video-tile][style*="--vc-pfp-hide-bg"] [class*="background"] {
     background: none !important;
 }
 
-/* Box mode and camera tiles ring the tile box while speaking. Picture mode
-   rings the picture through the filter above instead, and stream video never
-   carries the marker. No transition: fading a blurred shadow repaints it every
+/* Box mode rings the tile box while speaking, like Discord's own border.
+   Picture mode rings the picture through the filter above instead. Stream
+   tiles never carry the speaking marker; the stream exclusion is a backstop. No transition: fading a blurred shadow repaints it every
    frame. */
-div[data-selenium-video-tile][style*="--vc-pfp-speaking"]:not([style*="--vc-pfp-ring-pic"]) {
-    box-shadow: 0 0 0 2px var(--green-360, #23a55a), 0 0 16px 3px rgb(35 165 90 / 50%) !important;
-}
-
-/* A stream tile paints its preview picture over the avatar layer, so the filter
-   glow on the avatar has no visible host; ring the tile box instead. The tile
-   carries the speaking marker only while its video is not painting (the watched
-   stream stands down), so a playing video never gets ringed. */
-div[data-selenium-video-tile][style*="--vc-pfp-stream"][style*="--vc-pfp-ring-pic"][style*="--vc-pfp-speaking"] {
+div[data-selenium-video-tile][style*="--vc-pfp-speaking"]:not([style*="--vc-pfp-ring-pic"], [style*="--vc-pfp-stream"]) {
     box-shadow: 0 0 0 2px var(--green-360, #23a55a), 0 0 16px 3px rgb(35 165 90 / 50%) !important;
 }
 
