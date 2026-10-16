@@ -69,3 +69,19 @@ Each folder retains its license and upstream attribution. The collection contain
 ## Guard recovery update
 
 MicSpamGuard and StereoGuard use local volume holds, fresh safe evidence, separate trigger/release thresholds and a 1.5-second recovery. Missing samples cannot reopen a held user. A renewed blast or stereo violation immediately closes recovery. The published tests include 49 MicSpamGuard checks and 9 StereoGuard hold/recovery checks. `npm test` runs both. See each guard's README for zero-reading and native stereo limits.
+
+## Contributing
+
+Bug reports, feature ideas and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and what to include.
+
+## Star history
+
+⭐ Thanks for the stars, plugin reports and fixes.
+
+<a href="https://www.star-history.com/?repos=DavidHiFi%2FDiscord-Plugins&amp;type=date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=DavidHiFi/Discord-Plugins&amp;type=date&amp;theme=dark&amp;legend=top-left" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=DavidHiFi/Discord-Plugins&amp;type=date" />
+    <img alt="DavidHiFi/Discord-Plugins GitHub star history" src="https://api.star-history.com/chart?repos=DavidHiFi/Discord-Plugins&amp;type=date" />
+  </picture>
+</a>
