@@ -11,6 +11,7 @@ import { getUserSettingLazy } from "@api/UserSettings";
 import { settings as musicControlsSettings } from "@testcordplugins/PanelLayout/modules/musicControls/settings";
 import { TidalStore } from "@testcordplugins/PanelLayout/modules/musicControls/tidal/TidalStore";
 import { Logger } from "@utils/Logger";
+import { sleep } from "@utils/misc";
 import definePlugin, { OptionType } from "@utils/types";
 import { FluxDispatcher, PresenceStore, UserStore } from "@webpack/common";
 
@@ -91,6 +92,8 @@ const DOPAMINE_APP_ID = "826521040275636325";
 const DOPAMINE_DEFAULT_BRIDGE_PORT = 35499;
 const STATUS_MIN_INTERVAL_MS = 1500;
 const LYRICS_RETRY_DELAY_MS = 15000;
+// Ten failed polls is about 30 s at the 3 s cadence: the bridge is not there.
+const BRIDGE_FAIL_LIMIT = 10;
 
 function getDopamineBridgeUrl(): string {
     const port = Number(settings.store.dopamineBridgePort) || DOPAMINE_DEFAULT_BRIDGE_PORT;
@@ -109,6 +112,7 @@ let bridgeState: DopamineBridgeState | null = null;
 let bridgeSeenAt = 0;
 let bridgeRefreshing = false;
 let bridgeIntervalId: ReturnType<typeof setInterval> | null = null;
+let bridgeFailures = 0;
 
 function getPosition(): number {
     if (!isPlaying) return lastPosition;
@@ -287,7 +291,7 @@ async function writeCustomStatus(text: string, createdAtMs?: string): Promise<bo
     } catch (err) {
         logger.warn("updateSetting failed, retrying once:", err);
         try {
-            await new Promise(r => setTimeout(r, 400));
+            await sleep(400);
             await CustomStatusSetting.updateSetting(buildStatusPayload(text, createdAtMs));
             return true;
         } catch (err2) {
@@ -400,10 +404,18 @@ function requestLyrics() {
         });
 }
 
+function armTick() {
+    if (intervalId === null && settings.store.active) intervalId = setInterval(tick, 1000);
+}
+
+function parkTick() {
+    if (intervalId !== null) { clearInterval(intervalId); intervalId = null; }
+}
+
 function tick() {
-    if (!settings.store.active) return;
+    if (!settings.store.active) { parkTick(); return; }
     updateActivePlayback();
-    if (!isPlaying) return;
+    if (!isPlaying) { parkTick(); return; }
     if (!currentLines) {
         // Retries a lookup that failed transiently while the track keeps playing.
         requestLyrics();
@@ -467,10 +479,18 @@ async function refreshDopamineBridge() {
         const data = await response.json() as Partial<DopamineBridgeState>;
         bridgeState = data.title && data.artists ? data as DopamineBridgeState : null;
         bridgeSeenAt = Date.now();
+        bridgeFailures = 0;
         if (settings.store.active) updateActivePlayback();
     } catch {
         if (Date.now() - bridgeSeenAt >= 5000) {
             bridgeState = null;
+        }
+        // Nothing else reports a Dopamine track change, so when the bridge is
+        // gone the tick takes over as the playback watcher.
+        if (++bridgeFailures >= BRIDGE_FAIL_LIMIT && bridgeIntervalId !== null) {
+            clearInterval(bridgeIntervalId);
+            bridgeIntervalId = null;
+            armTick();
         }
     } finally {
         bridgeRefreshing = false;
@@ -509,6 +529,7 @@ function updatePlayback(newId: string, name: string, artist: string, playing: bo
         requestLyrics();
     }
 
+    if (isPlaying) armTick();
     if (!isPlaying && (wasPlaying || trackChanged)) handleStopStatus();
 }
 
@@ -600,11 +621,10 @@ function LyricsStatusToggleButton({ iconForeground, hideTooltips, nameplate }: U
                 settings.store.active = nextState;
 
                 if (!nextState) {
-                    if (intervalId !== null) { clearInterval(intervalId); intervalId = null; }
+                    parkTick();
                     handleStopStatus();
                 } else {
                     tick();
-                    if (intervalId === null) intervalId = setInterval(tick, 1000);
                 }
             }}
         />
@@ -634,15 +654,17 @@ export default definePlugin({
             // still a valid explicit choice, so rewriting it silently threw
             // away a deliberate TIDAL selection on every start.
             loadCustomSongDelays();
-            void refreshDopamineBridge();
-            bridgeIntervalId = setInterval(refreshDopamineBridge, 3000);
+            // Only the auto, dopamine and tidal sources read the bridge; a
+            // Spotify source would poll a port it never consults. The 3 s
+            // cadence matches the client tree.
+            if (settings.store.source !== "spotify") {
+                void refreshDopamineBridge();
+                bridgeIntervalId = setInterval(refreshDopamineBridge, 3000);
+            }
             FluxDispatcher.subscribe("SPOTIFY_PLAYER_STATE", onSpotifyPlayerState as any);
             FluxDispatcher.subscribe("SPOTIFY_LYRICS_DELAYS_LOADED", loadCustomSongDelays as any);
             FluxDispatcher.subscribe("SPOTIFY_LYRICS_CUSTOM_DELAY_CHANGE", onCustomDelayChange as any);
-            if (settings.store.active) {
-                tick();
-                if (intervalId === null) intervalId = setInterval(tick, 1000);
-            }
+            if (settings.store.active) tick();
             logger.info(`Started (source=${settings.store.source}, active=${settings.store.active})`);
         } catch (e) {
             logger.error("start failed:", e);
@@ -657,8 +679,9 @@ export default definePlugin({
         FluxDispatcher.unsubscribe("SPOTIFY_PLAYER_STATE", onSpotifyPlayerState as any);
         FluxDispatcher.unsubscribe("SPOTIFY_LYRICS_DELAYS_LOADED", loadCustomSongDelays as any);
         FluxDispatcher.unsubscribe("SPOTIFY_LYRICS_CUSTOM_DELAY_CHANGE", onCustomDelayChange as any);
-        if (intervalId !== null) { clearInterval(intervalId); intervalId = null; }
+        parkTick();
         if (bridgeIntervalId !== null) { clearInterval(bridgeIntervalId); bridgeIntervalId = null; }
+        bridgeFailures = 0;
         if (statusFlushTimer !== null) { clearTimeout(statusFlushTimer); statusFlushTimer = null; }
         pendingStatusText = null;
         // Disabling the plugin mid-playback used to leave the last lyric line
