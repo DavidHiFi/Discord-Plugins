@@ -122,14 +122,6 @@ The plugins used to live in separate repositories. Those are archived and link h
 
 </details>
 
----
-
-## Support development
-
-These plugins are free and always will be. If one of them makes your calls better, a coffee keeps them going.
-
-[![Support DavidHiFi on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/davidhifi)
-
 ## Contributing
 
 Bug reports with the plugin name and your TestCord version help the most, and fixes are welcome.
