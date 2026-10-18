@@ -1,0 +1,12 @@
+/* Voice rows render the staff-tag crown 2px above the text line (the badge's
+   own stylesheet offsets it with translateY(-2px)). Raise the self indicator
+   and the server tag to that same line so the three sit level, and leave
+   every other surface (tile pill, DM rows) on the text baseline. */
+
+[class*="voiceUser"] .vc-platform-indicator {
+    transform: translateY(-2px);
+}
+
+[class*="voiceUser"] [class*="chipletParent"] {
+    transform: translateY(-2px);
+}

@@ -21,6 +21,8 @@ import type { Session } from "@vencord/discord-types";
 import { filters, findByProps, mapMangledModuleLazy } from "@webpack";
 import { AuthenticationStore, SessionsStore, Tooltip, useStateFromStores } from "@webpack/common";
 
+import style from "./style.css?managed";
+
 const { useStatusFillColor } = mapMangledModuleLazy([".5625*", "translate"], {
     useStatusFillColor: filters.byCode(".hex")
 });
@@ -124,8 +126,8 @@ function Icon(path: string, opts?: { viewBox?: string; width?: number; height?: 
                 <svg
                     {...tooltipProps}
                     style={style}
-                    height={(opts?.height ?? 20) - (small ? 3 : 0)}
-                    width={(opts?.width ?? 20) - (small ? 3 : 0)}
+                    height={(opts?.height ?? 20) - (small ? 4 : 0)}
+                    width={(opts?.width ?? 20) - (small ? 4 : 0)}
                     viewBox={opts?.viewBox ?? "0 0 24 24"}
                     fill={color}
                 >
@@ -176,7 +178,7 @@ const VoiceIndicator = ErrorBoundary.wrap(({ userId }: { userId: string; }) => {
     const status = useStateFromStores([SessionsStore], selfSpoofedStatus);
     if (!isSelf || !status) return null;
     return (
-        <span className="vc-platform-indicator" style={{ display: "inline-flex", alignItems: "center", gap: 2, marginLeft: 4 }}>
+        <span className="vc-platform-indicator" style={{ display: "inline-flex", alignItems: "center", gap: 2, marginLeft: 4, verticalAlign: "middle" }}>
             {Object.entries(status).map(([platform, platformStatus]) => (
                 <PlatformIcon key={platform} platform={platform} status={platformStatus} small />
             ))}
@@ -196,6 +198,7 @@ export default definePlugin({
         TestcordDevs.DavidHiFi,
     ],
     settings,
+    managedStyle: style,
     settingsAboutComponent: () => (
         <Notice.Warning>
             Aggressive spoofing modifies IDENTIFY and client metadata. Risk is non-zero and may get you warned or banned.
@@ -225,6 +228,26 @@ export default definePlugin({
                 match: /#{intl::GUEST_NAME_SUFFIX}\)\]\}\):""(?=.{0,300}?userId:(\i\.\i))/,
                 replace: "$&,$self.renderVoiceIndicator($1)"
             }
+        },
+        {
+            // Call tile name plate (main voice view). Binds the tile overlay's
+            // participant id to a stable name, then appends the indicator to
+            // the name plate's child array right after the display name, so
+            // it sits just before the activity pill on hover.
+            find: ',"title-text"))',
+            replacement: [
+                {
+                    match: /participantUserId:(\i),channel:(\i),platform:(\i),/,
+                    // Bind the same property to a second local (vcPeSelfId);
+                    // rebinding $1's own identifier is a duplicate-binding
+                    // SyntaxError and the whole module fails to compile.
+                    replace: "participantUserId:$1,participantUserId:vcPeSelfId,channel:$2,platform:$3,"
+                },
+                {
+                    match: /(\i)\.push\(\(0,\i\.jsx\)\("span",\{className:\i\(\)\(\i\.\i,\i\),children:\i\},"title-text"\)\)/,
+                    replace: "$&,$self.tileIndicatorPush($1,vcPeSelfId)"
+                }
+            ]
         }
     ],
     getData() {
@@ -275,6 +298,13 @@ export default definePlugin({
     },
     renderVoiceIndicator(userId: string) {
         return <VoiceIndicator userId={userId} />;
+    },
+    tileIndicatorPush(arr: unknown[], userId: string) {
+        // Subscribe the tile overlay to self-view setting changes, then add
+        // the indicator element only for the local user when enabled.
+        settings.use(SELF_KEYS);
+        if (userId !== AuthenticationStore.getId()) return;
+        arr.push(<VoiceIndicator userId={userId} />);
     },
     start() {
         // Serve the spoofed client everywhere sessions are read for the own

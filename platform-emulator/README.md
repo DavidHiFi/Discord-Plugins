@@ -4,13 +4,13 @@ Spoofs the Discord platform your client reports, so other people see the device 
 
 ## What the fork adds
 
-The original plugin only changes what other people see. With Show Own Spoofed on, your own client shows the spoofed platform icon in the same places everyone else sees it: your profile, your messages, the member list and the voice channel user list. The icon uses the same shape and status color as Vencord's PlatformIndicators, so a spoofed VR headset shows the VR headset icon everywhere.
+The original plugin only changes what other people see. With Show Own Spoofed on, your own client shows the spoofed platform icon in the same places everyone else sees it: your profile, your messages, the member list and the voice channel user list. In a voice channel the icon also appears on your own call tile, just before the activity label, and the voice row icon is aligned with the server tag's crown line. The icon uses the same shape and status color as Vencord's PlatformIndicators, so a spoofed VR headset shows the VR headset icon everywhere.
 
 The toggle is off by default and does not need a client restart. Changing the spoofed platform still needs the gateway to reconnect, which the plugin's `verify-os` command triggers.
 
 ## Install
 
-Copy `index.tsx` into `src/testcordplugins/PlatformEmulator` in a TestCord source checkout and build with the client's documented commands. The plugin needs the TestCord dev2 tree; other clients need the imports adapted.
+Copy `index.tsx` and `style.css` into `src/testcordplugins/PlatformEmulator` in a TestCord source checkout and build with the client's documented commands. The plugin needs the TestCord dev2 tree; other clients need the imports adapted.
 
 ## Credits
 
@@ -22,4 +22,4 @@ Missing or wrong credit? Open an issue and it gets fixed.
 
 ## Rollback
 
-Turn Show Own Spoofed off, or remove `index.tsx` from the plugin folder. The plugin restores the original sessions store method when it stops, and it writes no settings files of its own.
+Turn Show Own Spoofed off, or remove `index.tsx` and `style.css` from the plugin folder. The plugin restores the original sessions store method when it stops, and it writes no settings files of its own.
