@@ -1,82 +1,146 @@
+<div align="center">
+
+<img src="https://socialify.git.ci/DavidHiFi/Discord-Plugins/image?description=1&font=Inter&language=1&name=1&owner=1&pattern=Plus&theme=Dark" alt="Discord-Plugins by DavidHiFi: Discord client plugins and companion tools for TestCord" width="100%">
+
 # Discord plugins
 
-DavidHiFi's maintained Discord client plugins, forks and companion tools in one repository. This is the current home for the collection. All plugin sources are included directly. A normal clone or GitHub ZIP contains everything listed below.
+**My Discord client plugins, forks and companion tools for TestCord, in one source repository.**
 
-## Get the collection
+Voice guards and meters, stream controls, staff badges, lyrics in your status and a few fixes.
+
+<a href="https://github.com/DavidHiFi/Discord-Plugins/releases/latest">
+<img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F%20DOWNLOAD%20LATEST%20RELEASE-2EA043?style=for-the-badge&labelColor=161B22" alt="Download the latest release" height="42">
+</a>
+
+<br><br>
+
+<img src="https://img.shields.io/github/v/release/DavidHiFi/Discord-Plugins?style=flat-square&label=version&color=8957E5&labelColor=161B22" alt="Latest version">
+<img src="https://img.shields.io/github/downloads/DavidHiFi/Discord-Plugins/total?style=flat-square&label=downloads&color=1F6FEB&labelColor=161B22" alt="Total downloads">
+<img src="https://img.shields.io/badge/platform-Discord%20%28TestCord%29-DB6D28?style=flat-square&labelColor=161B22" alt="Platform: Discord with TestCord">
+
+</div>
+
+---
+
+## Installation
+
+These are source plugins. You build them into the client yourself.
+
+1. Set up a [TestCord](https://github.com/TestcordDev/TestCord) source checkout with Node.js and pnpm, as its own docs describe.
+2. Download the ZIP from the [latest release](https://github.com/DavidHiFi/Discord-Plugins/releases/latest) and unzip it. `SHA256SUMS.txt` lets you check the download.
+3. For each plugin you want, copy its source folder into the destination folder in the checkout. The table under [Plugin folders](#plugin-folders) lists both. Copy every file, CSS and native helpers included.
+4. From the checkout, run `pnpm install` once, then `pnpm build`.
+5. Restart Discord after your voice call ends, then turn the plugins on under **Settings**, **TestCord**, **Plugins**.
+
+LyricsStatus, Custom Stream Quality, PanelLayout and StreamEnhancer replace plugins that TestCord already ships, so back up those folders first. Turn off the bundled FullVCPFP before you turn on RoundedVcPfp.
+
+## Features
+
+### Voice
+
+- **MicSpamGuard:** balances voice levels and holds anyone who stays extremely loud at local volume zero, then fades them back in.
+- **StereoGuard:** locally silences a participant whose audio is not mono, and restores them once it is.
+- **VoiceVUMeters:** left and right level meters for everyone in the call, in the channel list and on call tiles.
+- **ClickToUnmute:** click a locally muted member's mute icon to unmute them.
+- **RoundedVcPfp:** full-size avatars on call tiles, with rounding, zoom, glow and speaking-ring options.
+- **FakeVoice:** fake mute, deafen, camera, stream and game states, with optional hotkeys and Stream Deck buttons.
+
+### Streaming
+
+- **StreamEnhancer:** TestCord's stream tuning plugin with a working local camera preview and an optional spoofed resolution and FPS badge.
+- **Custom Stream Quality:** encoder and badge controls. It is legacy now; StreamEnhancer replaces it.
+
+### Interface
+
+- **StaffTag:** a crown or text badge next to server owners, admins and moderators in voice, the member list, messages and profiles.
+- **PanelLayout:** TestCord's panel layout, with a footer ping that shows real voice latency during calls.
+- **HasStrip:** removes `:has()` style rules that make Discord stutter, at the cost of some visual details.
+
+### Status
+
+- **LyricsStatus:** shows the current lyric line from Dopamine, TIDAL or Spotify as your custom status.
+
+## Notes
+
+> [!IMPORTANT]
+> **Built for TestCord.** StaffTag also ships a Vencord version and runs on Equicord, and RoundedVcPfp has a `vencord/` folder. The other plugins use TestCord imports and need changes to run elsewhere.
+
+> [!NOTE]
+> **Desktop stereo needs the native bridge.** VoiceVUMeters and StereoGuard read each person's left and right audio on Discord Desktop through the bridge in `voice-vu-meters/native`. Its installer checks Discord's voice module against a pinned hash and refuses anything else. Without the bridge, the meters fall back to one level and StereoGuard does nothing.
+
+> [!NOTE]
+> **Each folder keeps its own license.** Forks keep their original authors and license. The collection mixes MIT and GPL-3.0-or-later code, so read the `LICENSE` in a plugin's folder before you reuse it.
+
+<details>
+<summary><b>Plugin folders</b></summary>
+
+<br>
+
+`plugins.json` holds the same list in machine-readable form. [PROVENANCE.md](PROVENANCE.md) records where each plugin came from and what I changed.
+
+| Plugin | Copy this | Into this TestCord folder | License |
+|---|---|---|---|
+| [MicSpamGuard](mic-spam-guard/) | `mic-spam-guard/` | `src/userplugins/MicSpamGuard` | MIT |
+| [StereoGuard](stereo-guard/) | `stereo-guard/` | `src/userplugins/StereoGuard` | MIT |
+| [VoiceVUMeters](voice-vu-meters/) | `voice-vu-meters/` | `src/userplugins/VoiceVUMeters` | MIT |
+| [ClickToUnmute](click-to-unmute/) | `click-to-unmute/` | `src/userplugins/ClickToUnmute` | MIT |
+| [RoundedVcPfp](rounded-vc-pfp/) | `rounded-vc-pfp/` | `src/userplugins/RoundedVcPfp` | GPL-3.0-or-later |
+| [FakeVoice](fakevoice/) | `fakevoice/` | `src/userplugins/fakevoice` | MIT |
+| [StreamEnhancer](stream-enhancer/) | `stream-enhancer/` | `src/testcordplugins/StreamEnhancer` | GPL-3.0-or-later |
+| [Custom Stream Quality](custom-stream-quality/) | `custom-stream-quality/src/` | `src/testcordplugins/StreamQuality` | MIT |
+| [StaffTag](stafftag/) | `stafftag/` | `src/userplugins/staffTag` | MIT |
+| [PanelLayout](panel-layout/) | `panel-layout/` | `src/testcordplugins/PanelLayout` | GPL-3.0-or-later |
+| [HasStrip](has-strip/) | `has-strip/` | `src/testcordplugins/HasStrip` | GPL-3.0-or-later |
+| [LyricsStatus](better-lyrics-sync/) | `better-lyrics-sync/src/lyricsStatus/` | `src/testcordplugins/lyricsStatus` | GPL-3.0-or-later |
+
+The FakeVoice Stream Deck plugin is in `fakevoice/streamdeck/`, and the Dopamine companion for LyricsStatus is in `better-lyrics-sync/dopamine-rpc-patch/`. Each plugin folder has a README with its own setup steps and limits.
+
+</details>
+
+<details>
+<summary><b>Running the tests</b></summary>
+
+<br>
+
+The tests use synthetic audio samples and captured Discord code, so no running client is needed.
 
 ```sh
-git clone https://github.com/DavidHiFi/Discord-Plugins.git
+npm install
+npm test
 ```
 
-Or use [Download ZIP](https://github.com/DavidHiFi/Discord-Plugins/archive/refs/heads/main.zip). No submodule commands or separate plugin repositories are required.
+They cover MicSpamGuard (62 checks), StereoGuard (22), the PanelLayout ping (11) and StreamEnhancer's badge, camera and patch checks. They do not prove behaviour in a live call.
 
-## Plugins
+</details>
 
-| Plugin | What it does | TestCord destination |
-| --- | --- | --- |
-| [ClickToUnmute](click-to-unmute/) | Click a locally muted member's mute icon to unmute them. | `src/userplugins/ClickToUnmute` |
-| [StaffTag](stafftag/) | Staff badges in chat, member lists and profiles. | `src/userplugins/staffTag` |
-| [FakeVoice](fakevoice/) | Local fake voice states, a native loopback bridge and Stream Deck controls. | `src/userplugins/fakevoice` |
-| [LyricsStatus](better-lyrics-sync/) | Current lyric lines in custom status, with the Dopamine RPC companion. | `src/testcordplugins/lyricsStatus` |
-| [StreamEnhancer](stream-enhancer/) | DavidHiFi fork with native camera previews, spoofed panel previews and spoofed resolution/FPS badges. | `src/testcordplugins/StreamEnhancer` |
-| [Custom Stream Quality](custom-stream-quality/) | Encoder controls and independent advertised stream badges. | `src/testcordplugins/StreamQuality` |
-| [RoundedVcPfp](rounded-vc-pfp/) | Rounded full-resolution avatars on call tiles, with independent picture and tile radius (0-52 each), zoom (25-100 %), a bare-picture background switch, an optional user-backgrounds switch, a customizable glow and a speaking ring that keeps camera tiles on Discord's own border. | `src/userplugins/RoundedVcPfp` |
-| [MicSpamGuard](mic-spam-guard/) | Gentle voice balancing and sustained extreme-loudness protection. | `src/userplugins/MicSpamGuard` |
-| [StereoGuard](stereo-guard/) | Stereo detection for known per-participant streams; no guessed output-mix mutes. | `src/userplugins/StereoGuard` |
-| [VoiceVUMeters](voice-vu-meters/) | Per-participant left/right meters with selectable tile placements, stream-tile metering and an audited native bridge for desktop remote stereo. | `src/userplugins/VoiceVUMeters` |
-| [HasStrip](has-strip/) | Removes costly :has() stylesheet rules, with visual tradeoffs. | `src/testcordplugins/HasStrip` |
-| [PanelLayout](panel-layout/) | The maintained TestCord panel layout, including the ping-freshness fix. | `src/testcordplugins/PanelLayout` |
+<details>
+<summary><b>History</b></summary>
 
-This collection contains custom implementations and forks with local changes. The duplicate FullVCPFP folder was removed on 2026-10-01; RoundedVCPFP retains the avatar fixes and configurable rounding. Forks keep their original authors and license, so preserve both when sharing changes. `plugins.json` lists the source folder, destination and license for each entry.
+<br>
 
-## Install
+The plugins used to live in separate repositories. Those are archived and link here, and their commit histories are kept in this repo under `history/<plugin>-2026-09-30` tags. New plugin changes go here.
 
-Use a TestCord source checkout. Choose the plugins you want and copy the contents of the source folders listed in `plugins.json` into their destination folders. Copy all source files, including CSS and native helpers. For example, copy `fakevoice/index.tsx` and `fakevoice/native.ts` into `src/userplugins/fakevoice/`. The optional Stream Deck companion lives in `fakevoice/streamdeck/`.
+</details>
 
-For LyricsStatus, copy `better-lyrics-sync/src/lyricsStatus/`. For Custom Stream Quality, copy `custom-stream-quality/src/`. Those two, PanelLayout and StreamEnhancer replace existing TestCord plugin folders, so back up the old source first. RoundedVCPFP is the maintained avatar fork in this collection. Disable the client's bundled FullVCPFP before enabling RoundedVCPFP.
+---
 
-From the client checkout, build with its documented commands. For the current TestCord tree:
+## Support development
 
-```sh
-node scripts/generateBDPlugins.mjs
-node --require=./scripts/suppressExperimentalWarnings.js scripts/build/build.mjs
-```
+These plugins are free and always will be. If one of them makes your calls better, a coffee keeps them going.
 
-Load the rebuilt client after your voice call ends. This repository does not restart or alter your running Discord installation.
-
-Vencord and Equicord compatibility depends on the plugin's imports and client APIs. StaffTag includes a `vencord/` variant. TestCord-specific imports in LyricsStatus, PanelLayout and other extensions require TestCord or adaptation to another client. Per-plugin READMEs describe additional requirements.
-
-## Current validation
-
-On 2026-10-03, PanelLayout's footer ping repair passed eleven regression checks, targeted lint, Desktop and Equibop builds. Six live samples matched native voice latency at 76 ms and 66 ms. The shared test command now includes the ping checks.
-
-Sources were synchronized from the maintained client checkout on 2026-09-30. MicSpamGuard passes 49 offline behavior checks. VoiceVUMeters passes 33 offline PCM, pan, identity and peak checks plus an actual two-participant native decoder test. StereoGuard passes 9 hold/recovery checks alongside the shared attribution and cleanup checks. Targeted lint and isolated desktop and Equibop builds passed.
-
-Previous combined builds of all three plugins started without matching errors. The latest guard recovery build was installed and loaded through one authorized restart on 2026-09-30. All three audio plugins logged a clean start, and the saved guard settings stayed unchanged. A live blast/recovery scenario has not been exercised for this build. The maintainer confirmed that their own meter separates hard-left and hard-right input. The 2026-10-01 VoiceVUMeters companion bridge measures each remote participant's decoded left/right PCM on its audited desktop voice build. Two independently encoded synthetic participants passed hard-left/right separation through the actual native decoder, and the bridge loaded in Discord. A live friend test was not performed. Without the bridge, Desktop retains the scalar/local-pan fallback. StereoGuard does not mute anyone based on a shared output-device mix.
-
-MicSpamGuard rejects conflicting participant keys, SSRC owners and explicit user identities before any mute or volume write. Self, outgoing and unidentified samples cannot target another participant. Reproduce its checks from this repository with `npm install` and `npm test`. The tests use synthetic samples and a cached Discord volume-conversion fixture, not a running client.
-
-## Plugin origins
-
-[PROVENANCE.md](PROVENANCE.md) records each plugin's origin and the local changes that justify its inclusion.
-
-## History and licenses
-
-The former standalone repositories are archived with links here. Their original commit histories are retained in this repository under `history/<plugin>-2026-09-30` tags. The master repository's existing history is preserved through the rename. Future plugin changes belong here.
-
-Each folder retains its license and upstream attribution. The collection contains both MIT and GPL-3.0-or-later code; there is no single MIT license for the whole collection. See each folder's `LICENSE` and source headers. The Discord theme MochaCord remains a separate theme project.
-
-## Guard recovery update
-
-MicSpamGuard and StereoGuard use local volume holds, fresh safe evidence, separate trigger/release thresholds and a 1.5-second recovery. Missing samples cannot reopen a held user. A renewed blast or stereo violation immediately closes recovery. The published tests include 49 MicSpamGuard checks and 9 StereoGuard hold/recovery checks. `npm test` runs both. See each guard's README for zero-reading and native stereo limits.
+[![Support DavidHiFi on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/davidhifi)
 
 ## Contributing
 
-Bug reports, feature ideas and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and what to include.
+Bug reports with the plugin name and your TestCord version help the most, and fixes are welcome.
+
+<a href="CONTRIBUTING.md">
+<img src="https://img.shields.io/badge/%F0%9F%A4%9D%20HOW%20TO%20CONTRIBUTE-8957E5?style=for-the-badge&labelColor=161B22" alt="How to contribute" height="36">
+</a>
 
 ## Star history
 
-⭐ Thanks for the stars, plugin reports and fixes.
+Thanks for the stars, plugin reports and fixes.
 
 <a href="https://www.star-history.com/?repos=DavidHiFi%2FDiscord-Plugins&amp;type=date">
   <picture>
@@ -85,3 +149,37 @@ Bug reports, feature ideas and pull requests are welcome. See [CONTRIBUTING.md](
     <img alt="DavidHiFi/Discord-Plugins GitHub star history" src="https://api.star-history.com/chart?repos=DavidHiFi/Discord-Plugins&amp;type=date" />
   </picture>
 </a>
+
+## Credits
+
+- **Author:** Myself, [DavidHiFi](https://github.com/DavidHiFi)
+
+| Who | What |
+|---|---|
+| **Kurtzon Audio** ([Kurtzon's Discord plugins](https://github.com/kurtzonaudio/kurtzons-discord-plugins), MIT) | The original MicSpamGuard, StereoGuard, VoiceVUMeters and ClickToUnmute, which these forks build on. |
+| **deracul** ([TestCord](https://github.com/TestcordDev/TestCord)) | The original FakeVoice plugin. This fork is MIT with the copyright holders' permission. |
+| **mochienya** ([Equicord FullVCPFP](https://github.com/Equicord/Equicord/tree/main/src/equicordplugins/fullVcPfp), GPL-3.0) | FullVCPFP, the plugin RoundedVcPfp is forked from. |
+| **omaw** ([TestCord StreamEnhancer](https://github.com/TestcordDev/TestCord/tree/main/src/testcordplugins/StreamEnhancer), GPL-3.0) | The upstream StreamEnhancer plugin. |
+| **Sharp** ([TestCord LyricsStatus](https://github.com/TestcordDev/TestCord/tree/main/src/testcordplugins/lyricsStatus), GPL-3.0) | The upstream LyricsStatus plugin. |
+| **deracul, Aviv, x2b and sirphantom89** ([TestCord PanelLayout](https://github.com/TestcordDev/TestCord/tree/main/src/testcordplugins/PanelLayout), GPL-3.0) | The upstream PanelLayout plugin and most of its modules. |
+| **x2b** ([TestCord](https://github.com/TestcordDev/TestCord)) | The original Custom Stream Quality plugin, which my version rewrites. |
+| **DevilBro** ([BetterDiscord StaffTag](https://github.com/mwittrien/BetterDiscordAddons/tree/20e22dfbf7f55d84b22a703a594242275c525399/Plugins/StaffTag)) | The idea behind StaffTag. No BetterDiscord code is used. |
+| **Tsuda Kageyu** ([MinHook](https://github.com/TsudaKageyu/minhook), BSD-2-Clause) | The hooking library bundled with the VoiceVUMeters native bridge. |
+| **Vendicated and contributors** ([Vencord](https://github.com/Vendicated/Vencord), GPL-3.0) | The plugin API that TestCord and Equicord inherit, and the copyright line on the GPL plugins. |
+
+Built on [Discord](https://discord.com), [TestCord](https://github.com/TestcordDev/TestCord), [Equicord](https://github.com/Equicord/Equicord) and [Vencord](https://github.com/Vendicated/Vencord), with [TypeScript](https://www.typescriptlang.org), [Node.js](https://nodejs.org), [esbuild](https://esbuild.github.io), [CMake](https://cmake.org), [MinHook](https://github.com/TsudaKageyu/minhook), [LRCLIB](https://lrclib.net), [Dopamine](https://github.com/digimezzo/dopamine) and the [Stream Deck SDK](https://docs.elgato.com/streamdeck/sdk/introduction/getting-started/).
+
+> Missing or wrong credit? [Open an issue](https://github.com/DavidHiFi/Discord-Plugins/issues/new) and I'll fix it.
+
+## Disclaimers
+
+Most of this project's code was developed with AI coding agents, including Claude Code, Codex and OpenCode. No single AI agent made the project.
+
+Client mods such as TestCord, Equicord and Vencord are against Discord's Terms of Service, and these plugins only run inside one. Use them at your own risk. FakeVoice and the stream badge options change what other people see, and the VoiceVUMeters bridge hooks Discord's voice module.
+
+The guards change other people's volume only on your own client. Nobody else in the call hears a difference.
+
+<div align="center">
+<br>
+<sub>Not affiliated with Discord, TestCord, Equicord, Vencord or Elgato. Requires the Discord desktop app and a <a href="https://github.com/TestcordDev/TestCord">TestCord</a> source checkout.</sub>
+</div>
