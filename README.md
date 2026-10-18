@@ -92,6 +92,7 @@ LyricsStatus, Custom Stream Quality, PanelLayout and StreamEnhancer replace plug
 | [PanelLayout](panel-layout/) | `panel-layout/` | `src/testcordplugins/PanelLayout` | GPL-3.0-or-later |
 | [HasStrip](has-strip/) | `has-strip/` | `src/testcordplugins/HasStrip` | GPL-3.0-or-later |
 | [LyricsStatus](better-lyrics-sync/) | `better-lyrics-sync/src/lyricsStatus/` | `src/testcordplugins/lyricsStatus` | GPL-3.0-or-later |
+| [PlatformEmulator](platform-emulator/) | `platform-emulator/` | `src/testcordplugins/PlatformEmulator` | GPL-3.0-or-later |
 
 The FakeVoice Stream Deck plugin is in `fakevoice/streamdeck/`, and the Dopamine companion for LyricsStatus is in `better-lyrics-sync/dopamine-rpc-patch/`. Each plugin folder has a README with its own setup steps and limits.
 

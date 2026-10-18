@@ -97,6 +97,14 @@
       "installTarget": "src/userplugins/ClickToUnmute",
       "license": "MIT",
       "description": "Click a locally muted voice member's mute icon to unmute them."
+    },
+    {
+      "folder": "platform-emulator",
+      "name": "PlatformEmulator",
+      "source": "platform-emulator",
+      "installTarget": "src/testcordplugins/PlatformEmulator",
+      "license": "GPL-3.0-or-later",
+      "description": "Spoofs the reported platform, with a self-view toggle so you see your own spoof everywhere."
     }
   ]
 }

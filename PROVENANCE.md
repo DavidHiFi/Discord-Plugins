@@ -15,6 +15,7 @@ This collection includes custom plugins and changed forks. It does not claim aut
 | HasStrip | Custom plugin that removes stylesheet rules containing `:has()` to address measured style recalculation stalls. Its visual tradeoffs are documented. |
 | PanelLayout | GPL fork of TestCord PanelLayout. Includes changes to the system monitor and music controls, including the voice ping freshness fix. Most upstream modules remain unchanged. |
 | StreamEnhancer | GPL fork of TestCord StreamEnhancer. Restores the native camera renderer so the local camera preview is not blank, and adds the spoofed resolution/FPS screen-share badge controls from Custom Stream Quality. Upstream authors are kept in the plugin's author list. |
+| PlatformEmulator | GPL fork of TestCord PlatformEmulator by SirPhantom89 (dx) and x2b. Adds a self-view toggle and a voice channel indicator so your own client shows the spoofed icon the same way other people see it. Upstream authors stay in the author list. |
 
 FullVCPFP was removed because its local fixes are already present in RoundedVCPFP. Earlier cleanup removed the unchanged Zak's Fake Mute/Deafen and NoMirroredCamera copies. Git history retains those removals for rollback.
 
