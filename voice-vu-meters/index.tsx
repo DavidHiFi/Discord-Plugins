@@ -21,6 +21,8 @@ import meterStyle from "./style.css?managed";
 const logger = new Logger("VoiceVUMeters");
 
 const POLL_MS = 100;
+// How long a join may take to produce the engine connection before the tick parks
+const JOIN_GRACE_MS = 15000;
 // Subscriber sync is structural only (meters created or dropped, source and
 // mono flips). Level values ride the rAF loop and never touch React.
 const NOTIFY_MS = 500;
@@ -770,10 +772,12 @@ function noteActive(meter: Meter, rawLevel: number, now: number) {
 function updateAudioActive() {
     const seen = new Set<string>();
     const now = Date.now();
+    const selfSilent = MediaEngineStore.isSelfMute() || MediaEngineStore.isSelfDeaf();
+    const me = UserStore.getCurrentUser()?.id;
     for (const [userId, meter] of meters) {
         const key = userId.startsWith("stream:") ? userId.slice(7) : userId;
         seen.add(key);
-        const active = (meter.activeUntil ?? 0) > now;
+        const active = (meter.activeUntil ?? 0) > now && !(selfSilent && key === me);
         if (active && debugState.firstActiveAt == null) debugState.firstActiveAt = now;
         if (active !== audioActiveUsers.has(key)) {
             if (active) audioActiveUsers.add(key);
@@ -903,8 +907,30 @@ function checkSelfMismatch(meter: Meter, muted: boolean, raw: number, now: numbe
     if (inputMismatchDrops >= 2) inputSuspendKey = MediaEngineStore.getInputDeviceId();
 }
 
+// The tick follows the call, not the plugin lifetime: with no connection there
+// is nothing to meter, so an idle client runs no interval at all. The first
+// sample is immediate so a join never shows a dead meter.
+let armedAt = 0;
+
+function armTick() {
+    if (intervalId === undefined) {
+        intervalId = setInterval(tick, POLL_MS);
+        armedAt = Date.now();
+    }
+    tick();
+}
+
+function disarmTick() {
+    if (intervalId !== undefined) {
+        clearInterval(intervalId);
+        intervalId = undefined;
+    }
+    armedAt = 0;
+}
+
 function tick() {
     try {
+        debugState.ticks = (debugState.ticks ?? 0) + 1;
         const conn = getConnection();
         if (conn !== connection) {
             dropAll();
@@ -913,9 +939,16 @@ function tick() {
             delete debugState.firstActiveAt;
             lastScanAt = 0;
             statsFailed = false;
+            if (!connection) disarmTick();
         }
 
-        if (!connection) return;
+        if (!connection) {
+            // A join dispatches VOICE_CHANNEL_SELECT before the engine
+            // connection exists, so the loop waits out a join window instead of
+            // parking the moment it sees no connection.
+            if (Date.now() - armedAt >= JOIN_GRACE_MS) disarmTick();
+            return;
+        }
 
         const now = Date.now();
         const web = isWebConnection(connection);
@@ -1271,22 +1304,29 @@ export default definePlugin({
         return <TileMeter userId={userId} />;
     },
 
+    flux: {
+        // A join arms the loop; a leave lets tick() see the drop and disarm it.
+        VOICE_CHANNEL_SELECT({ channelId }: { channelId: string | null; }) {
+            if (channelId) armTick();
+            else tick();
+        }
+    },
+
     start() {
         if (!settings.store.peakHoldEnabled) {
             settings.store.showPeak = true;
             settings.store.peakHoldEnabled = true;
         }
         document.addEventListener("visibilitychange", onVisibilityChange);
-        intervalId = setInterval(tick, POLL_MS);
+        if (SelectedChannelStore.getVoiceChannelId()) armTick();
     },
 
     stop() {
         document.removeEventListener("visibilitychange", onVisibilityChange);
 
-        if (intervalId !== undefined) {
-            clearInterval(intervalId);
-            intervalId = undefined;
-        }
+        disarmTick();
+        audioActiveUsers.clear();
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("testcord-vu-audio-change"));
 
         parkFrameLoop();
         domResize?.disconnect();
