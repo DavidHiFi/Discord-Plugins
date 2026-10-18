@@ -1,0 +1,11 @@
+This repository is a collection. The plugins each keep their original licenses:
+
+- MIT: MicSpamGuard, StereoGuard, VoiceVUMeters, ClickToUnmute, FakeVoice,
+  Custom Stream Quality, StaffTag (this collection's modifications to those)
+- GPL-3.0-or-later: RoundedVcPfp, StreamEnhancer, PanelLayout, HasStrip,
+  LyricsStatus
+
+See the LICENSE file inside each plugin folder. The collection structure
+and the owner's changes are MIT licensed where not superseded above.
+
+Copyright (c) 2026 DavidHiFi. See each plugin folder for original authors.
