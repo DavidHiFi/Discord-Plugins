@@ -223,10 +223,17 @@ export default definePlugin({
             ]
         },
         {
-            find: "#{intl::GUEST_NAME_SUFFIX})]",
+            // Voice row right-side icon strip. Pushes the self indicator into
+            // the icons array just before the activity/game icon group is
+            // pushed, so it sits immediately left of the activity status icon,
+            // matching where other users' platform indicators appear. The
+            // injected element hides itself for other users and when the
+            // toggle is off; no store subscription here because the strip's
+            // collapsed early return would make a hook call conditional.
+            find: '"VoiceUserIcons"',
             replacement: {
-                match: /#{intl::GUEST_NAME_SUFFIX}\)\]\}\):""(?=.{0,300}?userId:(\i\.\i))/,
-                replace: "$&,$self.renderVoiceIndicator($1)"
+                match: /(userId:(\i)\.id\}\)\},`\$\{\2\.id\}-game`\):null;return\()((\i)&&null!=(\i)&&(\i)\.push\(\5\),)/,
+                replace: "$1$self.pushVoiceRowIndicator($6,$2.id),$3"
             }
         },
         {
@@ -296,8 +303,11 @@ export default definePlugin({
 
         return overrides;
     },
-    renderVoiceIndicator(userId: string) {
-        return <VoiceIndicator userId={userId} />;
+    pushVoiceRowIndicator(arr: unknown[], userId: string) {
+        // Prepends the indicator to the voice row's right-side icon array so
+        // it renders immediately left of the activity status icon. Visibility
+        // (self user + toggle) is decided inside VoiceIndicator.
+        arr.unshift(<VoiceIndicator userId={userId} />);
     },
     tileIndicatorPush(arr: unknown[], userId: string) {
         // Subscribe the tile overlay to self-view setting changes, then add
