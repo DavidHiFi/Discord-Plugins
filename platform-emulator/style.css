@@ -1,0 +1,5 @@
+/* The voice row's server tag sits on the username's text line, level with the
+   name; the staff-tag crown keeps its own badge offset from Discord's
+   stylesheet. The self indicator lives in the row's right-side icon strip next
+   to the 16px activity icon and needs no offset; the tile pill stays on the
+   text baseline. */
