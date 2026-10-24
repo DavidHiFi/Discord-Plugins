@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed (2026-10-24)
+- **Stock Dopamine sends no timestamps**: an activity with a title now counts as playing, and the position counts from when the plugin first sees the track. Before, the plugin never requested lyrics for stock Dopamine.
+- **Batched status save rejected inside Discord** (`loadIfNecessary` of undefined): the save now falls back to the plain `updateSetting` write, so lyric lines reach the custom status again.
+- The plugin source is synced with the TestCord tree it runs from, including the `artwork.ts` cover lookup the old copy lacked.
+
 ### Added
 - **Dopamine source**: the plugin reads the loopback bridge (`127.0.0.1:35499`) published by the patched Dopamine RPC, with a Discord-presence fallback when the bridge is unavailable.
 - **Automatic source mode**: uses whichever player is playing, Dopamine first (explicit `Dopamine` / `TIDAL` / `Spotify` choices remain). Legacy `tidal` selections migrate to `auto` on start.
