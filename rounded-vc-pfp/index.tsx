@@ -13,7 +13,7 @@ import usrbg from "@plugins/usrbg";
 import { fetchUserProfile } from "@utils/discord";
 import { getUserAvatarUrl } from "@utils/misc";
 import definePlugin, { makeRange, OptionType } from "@utils/types";
-import { ChannelRTCStore, ChannelStore, IconUtils, SelectedChannelStore, UserProfileStore, UserStore, useStateFromStores, VoiceStateStore } from "@webpack/common";
+import { ChannelRTCStore, ChannelStore, IconUtils, MediaEngineStore, SelectedChannelStore, UserProfileStore, UserStore, useStateFromStores, VoiceStateStore } from "@webpack/common";
 
 import style from "./style.css?managed";
 
@@ -67,11 +67,24 @@ function parseHexColor(color: string): [number, number, number] | undefined {
 // The glow keeps the two-layer look from the theme's first version: one wide
 // soft halo plus one tight edge shell, both from the user's color. The glow
 // mix controls its own transparency, so an alpha channel in the hex is ignored.
+// Every tile of every render asks for the same string, so it is built once per color.
+const glowFilters = new Map<string, string>();
 function glowFilter(color: string): string | undefined {
+    const cached = glowFilters.get(color);
+    if (cached !== undefined) return cached;
     const rgb = parseHexColor(color);
     if (!rgb) return undefined;
     const [r, g, b] = rgb;
-    return `drop-shadow(0 0 14px rgba(${r}, ${g}, ${b}, 0.4)) drop-shadow(0 0 3px rgba(${r}, ${g}, ${b}, 0.6))`;
+    const filter = `drop-shadow(0 0 14px rgba(${r}, ${g}, ${b}, 0.4)) drop-shadow(0 0 3px rgba(${r}, ${g}, ${b}, 0.6))`;
+    glowFilters.set(color, filter);
+    return filter;
+}
+
+// Muted or deafened, nobody hears you: your own tile carries no halo and no
+// speaking ring. Remote tiles are never affected by your mute.
+function isSelfSilent(userId?: string) {
+    return userId != null && userId === UserStore.getCurrentUser()?.id
+        && (MediaEngineStore.isSelfMute() || MediaEngineStore.isSelfDeaf());
 }
 
 // Profile fetches run one at a time. A full channel used to fire every
@@ -271,7 +284,7 @@ export default definePlugin({
             const speaking = channelId
                 ? ChannelRTCStore.getSpeakingParticipants(channelId).some(p => p.user.id === participantUserId && p.speaking)
                 : false;
-            return speaking;
+            return `${speaking}|${isSelfSilent(participantUserId)}`;
         }, [participantUserId]);
         // soundshare never sets Discord's speaking flag
         useStateFromStores([audioActivityStore], audioActivityStore.getVersion, []);
@@ -292,9 +305,10 @@ export default definePlugin({
         // Camera tiles keep Discord's own ring, there is no picture to glow
         const isCamera = !isStream && participant?.streamId != null;
         // Discord's flag is mic-only, soundshare comes from the VoiceVUMeters levels
-        const isSpeaking = (channelId
+        const selfSilent = isSelfSilent(participantUserId);
+        const isSpeaking = !selfSilent && ((channelId
             ? ChannelRTCStore.getSpeakingParticipants(channelId).some(p => p.user.id === participantUserId && p.speaking)
-            : false) || audioActiveNow(participantUserId);
+            : false) || audioActiveNow(participantUserId));
         // Only voice tiles showing the participant's picture glow. Like Discord's
         // own border, the speaking glow belongs to the person, not their screen
         // share or activity, so stream and activity tiles never light up.
@@ -319,7 +333,7 @@ export default definePlugin({
         }
         // The glow is independent of the background switch: it wraps the picture
         // whether the tile box is visible or not.
-        const glow = settings.store.enableGlow ? glowFilter(settings.store.glowColor ?? "") : undefined;
+        const glow = settings.store.enableGlow && !selfSilent ? glowFilter(settings.store.glowColor ?? "") : undefined;
         const ringPic = settings.store.speakingIndicator === "picture";
         // Picture mode adds the green glow to the filter, other tiles get a box from the stylesheet
         const filterParts: string[] = [];
